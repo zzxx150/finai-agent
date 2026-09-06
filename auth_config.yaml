@@ -1,15 +1,11 @@
-# بيانات المستخدمين المصرّح لهم بالدخول للتطبيق.
-# كلمة المرور الافتراضية أدناه هي: admin123
-# غيّرها فوراً باستخدام generate_password.py قبل مشاركة الرابط مع أي شخص.
-#
-# لإضافة مستخدم جديد: شغّل generate_password.py، انسخ الـ hash الناتج،
-# وأضف قسماً جديداً بنفس الشكل تحت "users:".
+# User accounts allowed to log into the app.
+# Default password: admin123 (change it!)
+# Run generate_password.py to create a hash for a new user.
 
 users:
   admin:
-    name: "المدير"
+    name: "Admin"
     password_hash: "eeeb2e35fadd499689d73d0aff75356a602f996f49654aa6137d66392132c464"
-  # مثال لإضافة مستخدم ثاني (بعد توليد الهاش الخاص به):
-   friend1:
-      name: "w6n"
-      password_hash: "fda662a8afa5c0ef9a9402c080bb0920a84bff0b696cb46ce263d3b9b5a8536a"
+  friend1:
+    name: "Friend"
+    password_hash: "fda662a8afa5c0ef9a9402c080bb0920a84bff0b696cb46ce263d3b9b5a8536a"

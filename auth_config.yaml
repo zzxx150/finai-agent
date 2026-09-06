@@ -10,6 +10,6 @@ users:
     name: "المدير"
     password_hash: "eeeb2e35fadd499689d73d0aff75356a602f996f49654aa6137d66392132c464"
   # مثال لإضافة مستخدم ثاني (بعد توليد الهاش الخاص به):
-  # friend1:
-  #   name: "صديقي"
-  #   password_hash: "PASTE_GENERATED_HASH_HERE"
+   friend1:
+      name: "w6n"
+      password_hash: "fda662a8afa5c0ef9a9402c080bb0920a84bff0b696cb46ce263d3b9b5a8536a"

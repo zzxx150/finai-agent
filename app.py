@@ -613,7 +613,7 @@ with tab_watch:
         if rows:
             df_watch = pd.DataFrame(rows)
             st.dataframe(
-                df_watch.style.applymap(
+                df_watch.style.map(
                     lambda v: "color: green" if isinstance(v, (int, float)) and v > 0 else (
                         "color: red" if isinstance(v, (int, float)) and v < 0 else ""
                     ),

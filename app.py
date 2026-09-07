@@ -241,7 +241,15 @@ with tab_search:
     with col2:
         analyze_btn = st.button("🔎 تحليل السهم", type="primary", use_container_width=True)
 
-    if symbol_input and analyze_btn:
+    # نحفظ الرمز بذاكرة الجلسة عشان النتائج ما تختفي لما يضغط المستخدم
+    # على زر "حلّل هذا الخبر" جوه القائمة (اللي يسبب إعادة تحميل الصفحة)
+    if analyze_btn and symbol_input:
+        st.session_state["active_symbol"] = symbol_input
+
+    active_symbol = st.session_state.get("active_symbol")
+
+    if active_symbol:
+        symbol_input = active_symbol
         with st.spinner(f"جاري جلب بيانات {symbol_input}..."):
             snapshot = fetch_stock_snapshot(symbol_input)
 

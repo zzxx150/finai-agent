@@ -305,14 +305,25 @@ def calculate_position_size(
 # ----------------------------------------------------------------------
 
 def send_telegram_alert(bot_token: str, chat_id: str, message: str) -> bool:
+    """
+    يرسل رسالة تلغرام. يدعم إرسال نفس الرسالة لأكثر من شخص إذا كانت
+    chat_id تحتوي على عدة أرقام مفصولة بفاصلة، مثل: "982402036,1115974152"
+    """
     if not bot_token or not chat_id:
         return False
     url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-    try:
-        r = requests.post(url, data={"chat_id": chat_id, "text": message}, timeout=10)
-        return r.status_code == 200
-    except Exception:
+    chat_ids = [c.strip() for c in chat_id.split(",") if c.strip()]
+    if not chat_ids:
         return False
+    all_sent = True
+    for cid in chat_ids:
+        try:
+            r = requests.post(url, data={"chat_id": cid, "text": message}, timeout=10)
+            if r.status_code != 200:
+                all_sent = False
+        except Exception:
+            all_sent = False
+    return all_sent
 
 
 # ----------------------------------------------------------------------

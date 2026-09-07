@@ -391,11 +391,27 @@ with tab_monitor:
             help="تنبيه: هذا يستهلك رصيد OpenAI تلقائياً كل مرة يُرصد فيها خبر قوي جديد.",
         )
 
-    watch_symbols_text = st.text_input(
-        "رموز الأسهم المراقَبة (مفصولة بفاصلة، بحد أقصى 15 رمزاً لتفادي حدود Finnhub المجانية)",
-        value="AAPL,NVDA,TSLA,MSFT,AMZN,GOOGL,META,AMD",
-        key="watch_symbols",
+    watch_scope = st.radio(
+        "نطاق المراقبة",
+        ["أسهم محددة", "السوق العام (كل الأسهم)"],
+        horizontal=True,
+        key="watch_scope",
     )
+
+    if watch_scope == "أسهم محددة":
+        watch_symbols_text = st.text_input(
+            "رموز الأسهم المراقَبة (مفصولة بفاصلة، بحد أقصى 15 رمزاً لتفادي حدود Finnhub المجانية)",
+            value="AAPL,NVDA,TSLA,MSFT,AMZN,GOOGL,META,AMD",
+            key="watch_symbols",
+        )
+    else:
+        st.caption(
+            "⚠️ في وضع 'السوق العام'، النظام يفحص أهم الأخبار العامة بالسوق كامل بدل قائمة محددة. "
+            "بعض الأخبار قد لا يظهر معها رمز سهم محدد (تُعرض حينها كـ 'خبر عام')."
+        )
+        watch_category = st.selectbox(
+            "تصنيف الأخبار", ["general", "merger", "forex", "crypto"], index=0, key="watch_category",
+        )
 
     if enable_monitor:
         st_autorefresh(interval=60_000, key="monitor_autorefresh")
@@ -404,9 +420,10 @@ with tab_monitor:
         st.session_state["seen_news_fp"] = set()
 
     if enable_monitor:
+        newly_found = None
         if not finnhub_key:
             st.warning("أدخل مفتاح Finnhub من الشريط الجانبي لتفعيل المراقبة.")
-        else:
+        elif watch_scope == "أسهم محددة":
             symbols = [s.strip().upper() for s in watch_symbols_text.split(",") if s.strip()][:15]
             newly_found = []
             with st.spinner(f"جاري فحص {len(symbols)} سهم..."):
@@ -422,6 +439,23 @@ with tab_monitor:
                         if classify_news_impact(item.get("headline", "")) == "مرشّح (High Impact)":
                             item["_symbol"] = sym
                             newly_found.append(item)
+        else:
+            newly_found = []
+            with st.spinner("جاري فحص أخبار السوق العام..."):
+                items = fetch_market_news(finnhub_key, category=watch_category, limit=50)
+                for item in items:
+                    if "error" in item:
+                        continue
+                    fp = news_fingerprint(item)
+                    if fp in st.session_state["seen_news_fp"]:
+                        continue
+                    st.session_state["seen_news_fp"].add(fp)
+                    if classify_news_impact(item.get("headline", "")) == "مرشّح (High Impact)":
+                        related = (item.get("related") or "").strip()
+                        item["_symbol"] = related if related else "خبر عام"
+                        newly_found.append(item)
+
+        if newly_found is not None:
 
             for item in newly_found:
                 st.toast(f"🚨 {item['_symbol']}: {item['headline'][:60]}", icon="🚨")

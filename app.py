@@ -39,6 +39,9 @@ from utils import (
     save_recommendation,
     get_all_recommendations,
     fetch_top_gainers,
+    check_liquidity_activity,
+    fetch_extended_hours_data,
+    get_market_status,
 )
 
 load_dotenv()
@@ -119,6 +122,25 @@ with st.sidebar:
     telegram_chat_id = st.text_input("Telegram Chat ID", value=get_secret("TELEGRAM_CHAT_ID", ""))
     enable_telegram = st.checkbox("تفعيل إرسال تنبيه عند العثور على خبر عالي التأثير", value=False)
 
+    st.markdown("**📨 إرسال رسالة يدوية للجميع**")
+    broadcast_text = st.text_area(
+        "اكتب أي نص وأرسله فوراً لكل المشتركين بخانة Chat ID أعلاه",
+        key="broadcast_text",
+        height=80,
+        placeholder="مثال: خبر عاجل، تنبيه شخصي، أو أي رسالة تبي ترسلها...",
+    )
+    if st.button("📤 إرسال الآن", use_container_width=True, key="send_broadcast"):
+        if not telegram_token or not telegram_chat_id:
+            st.error("لازم تعبّي Bot Token و Chat ID أول.")
+        elif not broadcast_text.strip():
+            st.warning("اكتب نص الرسالة أول.")
+        else:
+            sent = send_telegram_alert(telegram_token, telegram_chat_id, broadcast_text.strip())
+            if sent:
+                st.success("✅ تم الإرسال بنجاح لكل المشتركين.")
+            else:
+                st.error("❌ فشل الإرسال — تأكد من صحة Token و Chat ID.")
+
     st.divider()
     ai_model = st.selectbox("نموذج الذكاء الاصطناعي", ["gpt-4o-mini", "gpt-4o"], index=0)
 
@@ -130,6 +152,36 @@ with st.sidebar:
 # ----------------------------------------------------------------------
 st.title("📈 Financial AI Agent")
 st.caption("منصة تحليل الأخبار اللحظية بالذكاء الاصطناعي وتوجيه المتداول")
+
+# ----------------------------------------------------------------------
+# شريط حالة السوق الأمريكي (مفتوح / ما قبل الافتتاح / ما بعد الإغلاق / عطلة)
+# ----------------------------------------------------------------------
+market_status = get_market_status()
+status_icon = {
+    "السوق مفتوح (تداول رسمي)": "🟢",
+    "ما قبل الافتتاح (Pre-Market)": "🟡",
+    "ما بعد الإغلاق (After-Hours)": "🟠",
+}.get(market_status["status"], "🔴")
+
+status_cols = st.columns([2, 2, 2])
+status_cols[0].markdown(f"**{status_icon} حالة السوق:** {market_status['status']}")
+status_cols[1].markdown(f"**🕐 الوقت الآن (ET):** {market_status.get('now_et', '—')}")
+if market_status.get("next_holiday"):
+    status_cols[2].markdown(
+        f"**📅 أقرب عطلة:** {market_status['next_holiday']['name']} ({market_status['next_holiday']['date']})"
+    )
+elif market_status.get("detail"):
+    status_cols[2].markdown(f"**ℹ️ ملاحظة:** {market_status['detail']}")
+
+with st.expander("🕐 أوقات التداول الكاملة بالسوق الأمريكي"):
+    if "regular_hours" in market_status:
+        st.write(f"**ما قبل الافتتاح (Pre-Market):** {market_status['pre_market_hours']}")
+        st.write(f"**التداول الرسمي:** {market_status['regular_hours']}")
+        st.write(f"**ما بعد الإغلاق (After-Hours):** {market_status['after_hours']}")
+    st.caption(
+        "⚠️ الأوقات بتوقيت شرق أمريكا (ET) وهي تقريبية (لا تُعدّل تلقائياً بدقة حسب التوقيت الصيفي/الشتوي). "
+        "الأوقات والعطل معتمدة من الجدول الرسمي لبورصة نيويورك (NYSE) لعام 2026."
+    )
 
 (
     tab_dashboard,
@@ -273,6 +325,42 @@ with tab_search:
             sq_cols[0].metric("Float منخفض؟", "نعم ⚠️" if squeeze_info["low_float"] else "لا")
             sq_cols[1].metric("نسبة الشورت من الفلوت", f"{squeeze_info.get('short_percent_display', '—')}%")
             sq_cols[2].info(squeeze_info["squeeze_potential"])
+
+            # ---- دخول السيولة اللحظي ----
+            st.markdown("#### 💧 هل دخلت سيولة على السهم مؤخراً؟")
+            with st.spinner("جاري فحص حجم التداول اللحظي..."):
+                liquidity_info = check_liquidity_activity(symbol_input)
+            if "error" in liquidity_info:
+                st.caption(liquidity_info.get("status", "تعذر الفحص."))
+            else:
+                st.info(liquidity_info.get("status", "—"))
+                if liquidity_info.get("spike_volume"):
+                    lc1, lc2 = st.columns(2)
+                    lc1.metric("حجم الشمعة عند الدخول", format_large_number(liquidity_info["spike_volume"]))
+                    lc2.metric("متوسط الحجم (كل 5 دقائق)", format_large_number(liquidity_info["avg_volume_5m"]))
+            st.caption("هذا تقدير آلي من حجم التداول الظاهر، وليس بيانات تدفق أوامر حقيقية (Level 2).")
+
+            # ---- أسعار ما قبل الافتتاح وما بعد الإغلاق ----
+            st.markdown("#### 🌙 التداول قبل وبعد السوق الأمريكي")
+            ext_hours = fetch_extended_hours_data(symbol_input)
+            if "error" in ext_hours:
+                st.caption("تعذر جلب بيانات ما قبل/بعد السوق حالياً.")
+            else:
+                eh1, eh2, eh3 = st.columns(3)
+                pre_price = ext_hours.get("pre_market_price")
+                post_price = ext_hours.get("post_market_price")
+                eh1.metric(
+                    "قبل الافتتاح (Pre-Market)",
+                    f"${pre_price:.2f}" if pre_price else "غير متوفر الآن",
+                    delta=f"{ext_hours['pre_market_change_pct']:.2f}%" if ext_hours.get("pre_market_change_pct") else None,
+                )
+                eh2.metric("السعر الرسمي الحالي", f"${ext_hours.get('regular_market_price'):.2f}" if ext_hours.get("regular_market_price") else "—")
+                eh3.metric(
+                    "بعد الإغلاق (After-Hours)",
+                    f"${post_price:.2f}" if post_price else "غير متوفر الآن",
+                    delta=f"{ext_hours['post_market_change_pct']:.2f}%" if ext_hours.get("post_market_change_pct") else None,
+                )
+                st.caption("تظهر هذي الأسعار فقط خلال ساعات ما قبل الافتتاح أو ما بعد الإغلاق الفعلية، وتختفي أثناء التداول الرسمي.")
 
             # ---- الشارت التفاعلي (TradingView Widget) ----
             st.markdown("#### 📊 الشارت التفاعلي (TradingView)")

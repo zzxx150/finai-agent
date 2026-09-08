@@ -492,3 +492,168 @@ def fetch_top_gainers(limit: int = 15) -> List[Dict]:
         return rows
     except Exception as e:
         return [{"error": f"تعذر جلب القائمة (المصدر غير رسمي وقد يكون تغيّر): {e}"}]
+
+
+# ----------------------------------------------------------------------
+# 11) فحص دخول السيولة/حجم التداول (متى دخلت سيولة على السهم)
+# ----------------------------------------------------------------------
+
+def check_liquidity_activity(symbol: str) -> Dict:
+    """
+    يفحص بيانات اليوم للسهم (شموع كل 5 دقائق) ويحدد متى آخر مرة دخلت فيها
+    سيولة ملحوظة (حجم تداول أعلى من المعتاد بشكل واضح).
+    هذا تقدير آلي بسيط بناءً على مقارنة حجم كل شمعة بمتوسط اليوم، وليس
+    بيانات "Level 2" أو تدفق أوامر حقيقي.
+    """
+    try:
+        t = yf.Ticker(symbol)
+        intraday = t.history(period="1d", interval="5m")
+        if intraday.empty or len(intraday) < 3:
+            return {"status": "لا توجد بيانات كافية حالياً (قد يكون السوق مغلقاً)."}
+
+        avg_vol = intraday["Volume"].mean()
+        if avg_vol <= 0:
+            return {"status": "لا توجد بيانات حجم كافية."}
+
+        threshold = avg_vol * 1.8  # شمعة تعتبر "سيولة ملحوظة" لو حجمها أعلى من 1.8x المتوسط
+        now = intraday.index[-1]
+
+        spike_times = [idx for idx, vol in intraday["Volume"].items() if vol >= threshold]
+        if not spike_times:
+            return {
+                "status": "لا توجد سيولة ملحوظة دخلت اليوم حتى الآن.",
+                "last_candle_volume": int(intraday["Volume"].iloc[-1]),
+                "avg_volume_5m": int(avg_vol),
+            }
+
+        last_spike = spike_times[-1]
+        minutes_ago = (now - last_spike).total_seconds() / 60
+
+        if minutes_ago <= 10:
+            timing = "الآن (خلال آخر 10 دقائق)"
+        elif minutes_ago <= 30:
+            timing = "قبل شوي (خلال آخر نصف ساعة)"
+        elif minutes_ago <= 120:
+            timing = "من فترة قريبة (خلال آخر ساعتين)"
+        else:
+            timing = f"سابقاً اليوم (منذ حوالي {int(minutes_ago // 60)} ساعة)"
+
+        return {
+            "status": f"دخلت سيولة ملحوظة: {timing}",
+            "spike_time": last_spike.strftime("%H:%M"),
+            "minutes_ago": round(minutes_ago),
+            "spike_volume": int(intraday.loc[last_spike, "Volume"]),
+            "avg_volume_5m": int(avg_vol),
+        }
+    except Exception as e:
+        return {"status": f"تعذر فحص السيولة: {e}"}
+
+
+# ----------------------------------------------------------------------
+# 12) بيانات ما قبل وبعد إغلاق السوق (Pre-Market / After-Hours)
+# ----------------------------------------------------------------------
+
+def fetch_extended_hours_data(symbol: str) -> Dict:
+    """
+    يجلب سعر السهم في تداول ما قبل الافتتاح (Pre-Market) وما بعد الإغلاق
+    (After-Hours) إن كانت متوفرة من ياهو فايننس عبر yfinance.
+    قد تكون بعض الحقول فارغة حسب توقيت الطلب (تتوفر فقط خارج ساعات التداول الرسمية).
+    """
+    try:
+        t = yf.Ticker(symbol)
+        info = t.info if hasattr(t, "info") else {}
+
+        result = {
+            "pre_market_price": info.get("preMarketPrice"),
+            "pre_market_change_pct": info.get("preMarketChangePercent"),
+            "post_market_price": info.get("postMarketPrice"),
+            "post_market_change_pct": info.get("postMarketChangePercent"),
+            "regular_market_price": info.get("regularMarketPrice") or info.get("currentPrice"),
+        }
+        return result
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# ----------------------------------------------------------------------
+# 13) أوقات تداول السوق الأمريكي وأيام العطل الرسمية
+# ----------------------------------------------------------------------
+
+# عطل بورصة نيويورك (NYSE) الرسمية لعام 2026 (بتوقيت شرق أمريكا ET)
+US_MARKET_HOLIDAYS_2026 = {
+    dt.date(2026, 1, 1): "رأس السنة الميلادية",
+    dt.date(2026, 1, 19): "يوم مارتن لوثر كينغ",
+    dt.date(2026, 2, 16): "يوم الرؤساء (واشنطن)",
+    dt.date(2026, 4, 3): "الجمعة العظيمة (Good Friday)",
+    dt.date(2026, 5, 25): "يوم الذكرى (Memorial Day)",
+    dt.date(2026, 6, 19): "يوم جوونتينث (Juneteenth)",
+    dt.date(2026, 7, 3): "عيد الاستقلال (يُحتفل به بدل 4 يوليو لأنه يوافق السبت)",
+    dt.date(2026, 9, 7): "يوم العمال (Labor Day)",
+    dt.date(2026, 11, 26): "عيد الشكر (Thanksgiving)",
+    dt.date(2026, 12, 25): "عيد الميلاد",
+}
+
+# أوقات التداول بتوقيت شرق أمريكا (ET) — ملاحظة: لا تشمل فروقات التوقيت الصيفي/الشتوي تلقائياً
+MARKET_HOURS_ET = {
+    "pre_market_start": "04:00",
+    "pre_market_end": "09:30",
+    "regular_start": "09:30",
+    "regular_end": "16:00",
+    "after_hours_start": "16:00",
+    "after_hours_end": "20:00",
+}
+
+
+def get_market_status() -> Dict:
+    """
+    يحدد الحالة الحالية للسوق الأمريكي: مفتوح، ما قبل الافتتاح، ما بعد الإغلاق،
+    مغلق (عطلة نهاية أسبوع)، أو عطلة رسمية — بالاعتماد على توقيت شرق أمريكا.
+    ملاحظة: الحساب يفترض توقيت ET بدون تعديل تلقائي دقيق للتوقيت الصيفي/الشتوي؛
+    قد يختلف بساعة حسب موسم السنة.
+    """
+    now_utc = dt.datetime.utcnow()
+    # تقريب بسيط لتوقيت شرق أمريكا (ET = UTC-5 شتاءً، UTC-4 صيفاً)
+    # نستخدم UTC-4 (توقيت صيفي) لأغلب أشهر السنة كتقريب معقول
+    now_et = now_utc - dt.timedelta(hours=4)
+    today = now_et.date()
+    weekday = now_et.weekday()  # 0=Monday ... 6=Sunday
+
+    if today in US_MARKET_HOLIDAYS_2026:
+        return {
+            "status": "مغلق (عطلة رسمية)",
+            "detail": US_MARKET_HOLIDAYS_2026[today],
+            "now_et": now_et.strftime("%Y-%m-%d %H:%M"),
+        }
+
+    if weekday >= 5:  # سبت أو أحد
+        return {
+            "status": "مغلق (عطلة نهاية أسبوع)",
+            "detail": "السوق يفتح يوم الاثنين القادم",
+            "now_et": now_et.strftime("%Y-%m-%d %H:%M"),
+        }
+
+    current_time = now_et.strftime("%H:%M")
+    if MARKET_HOURS_ET["pre_market_start"] <= current_time < MARKET_HOURS_ET["pre_market_end"]:
+        status = "ما قبل الافتتاح (Pre-Market)"
+    elif MARKET_HOURS_ET["regular_start"] <= current_time < MARKET_HOURS_ET["regular_end"]:
+        status = "السوق مفتوح (تداول رسمي)"
+    elif MARKET_HOURS_ET["after_hours_start"] <= current_time < MARKET_HOURS_ET["after_hours_end"]:
+        status = "ما بعد الإغلاق (After-Hours)"
+    else:
+        status = "مغلق (خارج أوقات التداول)"
+
+    # حساب أقرب عطلة رسمية قادمة
+    upcoming_holidays = sorted([d for d in US_MARKET_HOLIDAYS_2026 if d >= today])
+    next_holiday = None
+    if upcoming_holidays:
+        next_date = upcoming_holidays[0]
+        next_holiday = {"date": next_date.strftime("%Y-%m-%d"), "name": US_MARKET_HOLIDAYS_2026[next_date]}
+
+    return {
+        "status": status,
+        "now_et": now_et.strftime("%Y-%m-%d %H:%M"),
+        "regular_hours": "9:30 صباحاً - 4:00 عصراً (بتوقيت شرق أمريكا ET)",
+        "pre_market_hours": "4:00 - 9:30 صباحاً (ET)",
+        "after_hours": "4:00 - 8:00 مساءً (ET)",
+        "next_holiday": next_holiday,
+    }

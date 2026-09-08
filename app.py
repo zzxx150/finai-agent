@@ -43,6 +43,7 @@ from utils import (
     fetch_extended_hours_data,
     get_market_status,
     send_ntfy_alert,
+    translate_texts_to_arabic,
 )
 
 load_dotenv()
@@ -59,6 +60,28 @@ def get_secret(key: str, default: str = "") -> str:
     except Exception:
         pass
     return os.getenv(key, default)
+
+
+def get_arabic_translations(texts, openai_api_key: str, model: str = "gpt-4o-mini"):
+    """
+    يترجم قائمة نصوص للعربية مع تخزين مؤقت بذاكرة الجلسة (session_state)،
+    بحيث أي عنوان خبر تُرجم مرة ما يُعاد ترجمته مرة ثانية حتى لو تكرر
+    ظهوره بتحديثات لاحقة — توفيراً لرصيد OpenAI.
+    """
+    if "translation_cache" not in st.session_state:
+        st.session_state["translation_cache"] = {}
+    cache = st.session_state["translation_cache"]
+
+    if not openai_api_key or not texts:
+        return list(texts)
+
+    to_translate = [t for t in texts if t not in cache]
+    if to_translate:
+        translated = translate_texts_to_arabic(openai_api_key, to_translate, model=model)
+        for orig, trans in zip(to_translate, translated):
+            cache[orig] = trans
+
+    return [cache.get(t, t) for t in texts]
 
 
 st.set_page_config(
@@ -223,13 +246,15 @@ with st.expander("🕐 أوقات التداول الكاملة بالسوق ا�
 # التبويب 1: لوحة الأخبار اليومية + خريطة الحرارة + فلترة عالية التأثير
 # ========================================================================
 with tab_dashboard:
-    col_a, col_b, col_c = st.columns([2, 1, 1])
+    col_a, col_b, col_c, col_d = st.columns([2, 1, 1, 1])
     with col_a:
         st.subheader("الأخبار اللحظية للسوق")
     with col_b:
         news_category = st.selectbox("التصنيف", ["general", "merger", "forex", "crypto"], index=0)
     with col_c:
         only_high_impact = st.checkbox("عرض عالي التأثير فقط", value=True)
+    with col_d:
+        translate_dashboard = st.checkbox("🌐 ترجمة للعربية", value=bool(openai_key), key="translate_dashboard")
 
     if st.button("🔄 تحديث الأخبار الآن", type="primary"):
         st.session_state["refresh_news"] = True
@@ -249,12 +274,20 @@ with tab_dashboard:
             st.success(f"تم العثور على {len(display_items)} خبراً من أصل {len(news_items)}")
 
             # خريطة حرارية مبسطة: تصنيف مبدئي (بدون AI) لكل خبر حسب الكلمات المفتاحية
+            display_items = display_items[:30]
+            headlines_raw = [item.get("headline", "") for item in display_items]
+            if translate_dashboard and openai_key:
+                with st.spinner("جاري ترجمة العناوين..."):
+                    headlines_ar = get_arabic_translations(headlines_raw, openai_key, model=ai_model)
+            else:
+                headlines_ar = headlines_raw
+
             heat_rows = []
-            for item in display_items[:30]:
+            for item, headline_display in zip(display_items, headlines_ar):
                 classification = classify_news_impact(item.get("headline", ""))
                 heat_rows.append({
                     "المصدر": item.get("source", "—"),
-                    "العنوان": item.get("headline", "")[:70],
+                    "العنوان": headline_display[:100],
                     "التصنيف الأولي": classification,
                     "الوقت": dt.datetime.fromtimestamp(item.get("datetime", 0)).strftime("%Y-%m-%d %H:%M") if item.get("datetime") else "—",
                     "الرابط": item.get("url", ""),
@@ -421,11 +454,19 @@ with tab_search:
                 elif not company_news:
                     st.info("لا توجد أخبار حديثة لهذا السهم.")
                 else:
+                    news_headlines_raw = [n.get("headline", "بدون عنوان") for n in company_news]
+                    if openai_key:
+                        with st.spinner("جاري ترجمة العناوين..."):
+                            news_headlines_ar = get_arabic_translations(news_headlines_raw, openai_key, model=ai_model)
+                    else:
+                        news_headlines_ar = news_headlines_raw
+
                     for idx, news in enumerate(company_news):
                         headline = news.get("headline", "بدون عنوان")
+                        headline_display = news_headlines_ar[idx]
                         pre_class = classify_news_impact(headline)
                         badge = "🔴" if pre_class == "مرشّح (High Impact)" else "⚪"
-                        with st.expander(f"{badge} {headline}"):
+                        with st.expander(f"{badge} {headline_display}"):
                             st.caption(
                                 f"المصدر: {news.get('source', '—')} | "
                                 f"{dt.datetime.fromtimestamp(news.get('datetime', 0)).strftime('%Y-%m-%d %H:%M') if news.get('datetime') else ''}"
@@ -565,9 +606,13 @@ with tab_monitor:
         if newly_found is not None:
 
             for item in newly_found:
-                st.toast(f"🚨 {item['_symbol']}: {item['headline'][:60]}", icon="🚨")
+                headline_ar = item["headline"]
+                if openai_key:
+                    headline_ar = get_arabic_translations([item["headline"]], openai_key, model=ai_model)[0]
 
-                news_msg = f"🚨 خبر قوي جديد على {item['_symbol']}\n{item['headline']}\nالمصدر: {item.get('source', '—')}"
+                st.toast(f"🚨 {item['_symbol']}: {headline_ar[:60]}", icon="🚨")
+
+                news_msg = f"🚨 خبر قوي جديد على {item['_symbol']}\n{headline_ar}\nالمصدر: {item.get('source', '—')}"
                 if enable_telegram and telegram_token and telegram_chat_id:
                     send_telegram_alert(telegram_token, telegram_chat_id, news_msg)
                 if enable_ntfy and ntfy_topic:

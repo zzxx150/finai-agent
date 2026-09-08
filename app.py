@@ -42,6 +42,7 @@ from utils import (
     check_liquidity_activity,
     fetch_extended_hours_data,
     get_market_status,
+    send_ntfy_alert,
 )
 
 load_dotenv()
@@ -130,16 +131,30 @@ with st.sidebar:
         placeholder="مثال: خبر عاجل، تنبيه شخصي، أو أي رسالة تبي ترسلها...",
     )
     if st.button("📤 إرسال الآن", use_container_width=True, key="send_broadcast"):
-        if not telegram_token or not telegram_chat_id:
-            st.error("لازم تعبّي Bot Token و Chat ID أول.")
-        elif not broadcast_text.strip():
+        if not broadcast_text.strip():
             st.warning("اكتب نص الرسالة أول.")
+        elif not telegram_token and not telegram_chat_id and not ntfy_topic:
+            st.error("لازم تعبّي بيانات تلغرام أو ntfy أول من الأعلى.")
         else:
-            sent = send_telegram_alert(telegram_token, telegram_chat_id, broadcast_text.strip())
-            if sent:
-                st.success("✅ تم الإرسال بنجاح لكل المشتركين.")
-            else:
-                st.error("❌ فشل الإرسال — تأكد من صحة Token و Chat ID.")
+            results = []
+            if telegram_token and telegram_chat_id:
+                results.append(("تلغرام", send_telegram_alert(telegram_token, telegram_chat_id, broadcast_text.strip())))
+            if ntfy_topic:
+                results.append(("ntfy", send_ntfy_alert(ntfy_topic, broadcast_text.strip(), title="📨 رسالة يدوية")))
+            for name, ok in results:
+                if ok:
+                    st.success(f"✅ تم الإرسال عبر {name}.")
+                else:
+                    st.error(f"❌ فشل الإرسال عبر {name} — تأكد من صحة الإعدادات.")
+
+    st.divider()
+    st.subheader("📱 تنبيهات ntfy (اختياري، بديل مجاني)")
+    ntfy_topic = st.text_input(
+        "اسم قناة ntfy السرية",
+        value=get_secret("NTFY_TOPIC", ""),
+        help="مثال: finai_alerts_boosh_2026_x7k9m",
+    )
+    enable_ntfy = st.checkbox("تفعيل إرسال إشعار ntfy عند العثور على خبر عالي التأثير", value=False)
 
     st.divider()
     ai_model = st.selectbox("نموذج الذكاء الاصطناعي", ["gpt-4o-mini", "gpt-4o"], index=0)
@@ -263,15 +278,18 @@ with tab_dashboard:
                     hide_index=True,
                 )
 
-                # تنبيه تلغرام تلقائي لأول خبر عالي التأثير في الجلسة الحالية
-                if enable_telegram and telegram_token and telegram_chat_id:
-                    high_impact_only = [r for r in heat_rows if r["التصنيف الأولي"] == "مرشّح (High Impact)"]
-                    if high_impact_only and not st.session_state.get("telegram_sent_once"):
-                        msg = f"🚨 خبر عالي التأثير:\n{high_impact_only[0]['العنوان']}\nالمصدر: {high_impact_only[0]['المصدر']}"
-                        sent = send_telegram_alert(telegram_token, telegram_chat_id, msg)
-                        st.session_state["telegram_sent_once"] = True
-                        if sent:
-                            st.toast("تم إرسال تنبيه تلغرام ✅")
+                # تنبيه تلقائي (تلغرام و/أو ntfy) لأول خبر عالي التأثير في الجلسة الحالية
+                high_impact_only = [r for r in heat_rows if r["التصنيف الأولي"] == "مرشّح (High Impact)"]
+                if high_impact_only and not st.session_state.get("alert_sent_once"):
+                    msg = f"🚨 خبر عالي التأثير:\n{high_impact_only[0]['العنوان']}\nالمصدر: {high_impact_only[0]['المصدر']}"
+                    any_sent = False
+                    if enable_telegram and telegram_token and telegram_chat_id:
+                        any_sent = send_telegram_alert(telegram_token, telegram_chat_id, msg) or any_sent
+                    if enable_ntfy and ntfy_topic:
+                        any_sent = send_ntfy_alert(ntfy_topic, msg, title="🚨 خبر عالي التأثير", priority=4) or any_sent
+                    st.session_state["alert_sent_once"] = True
+                    if any_sent:
+                        st.toast("تم إرسال التنبيه ✅")
             else:
                 st.info("لا توجد أخبار مطابقة للفلترة الحالية.")
 
@@ -548,11 +566,11 @@ with tab_monitor:
             for item in newly_found:
                 st.toast(f"🚨 {item['_symbol']}: {item['headline'][:60]}", icon="🚨")
 
+                news_msg = f"🚨 خبر قوي جديد على {item['_symbol']}\n{item['headline']}\nالمصدر: {item.get('source', '—')}"
                 if enable_telegram and telegram_token and telegram_chat_id:
-                    send_telegram_alert(
-                        telegram_token, telegram_chat_id,
-                        f"🚨 خبر قوي جديد على {item['_symbol']}\n{item['headline']}\nالمصدر: {item.get('source', '—')}",
-                    )
+                    send_telegram_alert(telegram_token, telegram_chat_id, news_msg)
+                if enable_ntfy and ntfy_topic:
+                    send_ntfy_alert(ntfy_topic, news_msg, title=f"🚨 خبر قوي: {item['_symbol']}", priority=4)
 
                 if enable_auto_ai and openai_key:
                     analysis = analyze_news_with_ai(
@@ -563,17 +581,19 @@ with tab_monitor:
                             item["_symbol"], item["headline"], analysis,
                             created_by=st.session_state.get("username", "system"),
                         )
+                        plan = analysis.get("trade_plan", {})
+                        rec_msg = (
+                            f"🎯 توصية جديدة: {item['_symbol']}\n"
+                            f"الإجراء: {plan.get('action', '—')}\n"
+                            f"الدخول: {plan.get('entry_note', '—')}\n"
+                            f"وقف الخسارة: {plan.get('stop_loss_note', '—')}\n"
+                            f"الهدف: {plan.get('target_note', '—')}\n"
+                            f"المدة التقريبية: {plan.get('estimated_duration', '—')}"
+                        )
                         if enable_telegram and telegram_token and telegram_chat_id:
-                            plan = analysis.get("trade_plan", {})
-                            msg = (
-                                f"🎯 توصية جديدة: {item['_symbol']}\n"
-                                f"الإجراء: {plan.get('action', '—')}\n"
-                                f"الدخول: {plan.get('entry_note', '—')}\n"
-                                f"وقف الخسارة: {plan.get('stop_loss_note', '—')}\n"
-                                f"الهدف: {plan.get('target_note', '—')}\n"
-                                f"المدة التقريبية: {plan.get('estimated_duration', '—')}"
-                            )
-                            send_telegram_alert(telegram_token, telegram_chat_id, msg)
+                            send_telegram_alert(telegram_token, telegram_chat_id, rec_msg)
+                        if enable_ntfy and ntfy_topic:
+                            send_ntfy_alert(ntfy_topic, rec_msg, title=f"🎯 توصية جديدة: {item['_symbol']}", priority=5)
 
             if newly_found:
                 st.success(f"✅ تم رصد {len(newly_found)} خبراً قوياً جديداً في آخر دورة فحص.")

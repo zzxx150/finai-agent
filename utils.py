@@ -657,3 +657,34 @@ def get_market_status() -> Dict:
         "after_hours": "4:00 - 8:00 مساءً (ET)",
         "next_holiday": next_holiday,
     }
+
+
+# ----------------------------------------------------------------------
+# 14) إرسال إشعار عبر ntfy.sh (بديل مجاني لتلغرام/واتساب)
+# ----------------------------------------------------------------------
+
+def send_ntfy_alert(topic: str, message: str, title: str = "Financial AI Agent", priority: int = 3) -> bool:
+    """
+    يرسل إشعار فوري لكل المشتركين بقناة ntfy المحددة.
+    نستخدم واجهة JSON الخاصة بـ ntfy (بدل الهيدرز مباشرة) لأنها تدعم
+    النصوص العربية وغير اللاتينية بشكل صحيح.
+    topic: اسم القناة السري (مثال: finai_alerts_boosh_2026_x7k9m)
+    priority: من 1 (منخفض) إلى 5 (عاجل جداً)
+    """
+    if not topic or not message:
+        return False
+    try:
+        r = requests.post(
+            "https://ntfy.sh/",
+            json={
+                "topic": topic.strip(),
+                "message": message,
+                "title": title,
+                "priority": priority,
+                "tags": ["warning", "chart_with_upwards_trend"],
+            },
+            timeout=10,
+        )
+        return r.status_code == 200
+    except Exception:
+        return False

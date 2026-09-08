@@ -182,6 +182,44 @@ AI_SYSTEM_PROMPT = """أنت محلل مالي محترف متخصص في تحل
 تنبيه إضافي: تقدير مدة الصفقة (estimated_duration) هو تخمين تقريبي جداً بناءً على طبيعة الخبر وسوابق مشابهة، وليس تنبؤاً دقيقاً بالوقت — الأسواق قد تتحرك أسرع أو أبطأ من أي تقدير بكثير."""
 
 
+def translate_texts_to_arabic(
+    openai_api_key: str, texts: List[str], model: str = "gpt-4o-mini"
+) -> List[str]:
+    """
+    يترجم قائمة نصوص (عناوين أخبار عادةً) إلى العربية دفعة واحدة بطلب AI واحد
+    بدل طلب منفصل لكل عنوان، توفيراً للتكلفة. يرجع النصوص الأصلية كما هي
+    لو ما توفر مفتاح OpenAI أو صار خطأ.
+    """
+    if not openai_api_key or OpenAI is None or not texts:
+        return texts
+
+    client = OpenAI(api_key=openai_api_key)
+    numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(texts))
+    system_prompt = (
+        "أنت مترجم مالي محترف. تُرجم عناوين وأخبار مالية من الإنجليزية إلى العربية الفصحى "
+        "بأسلوب صحفي مختصر وواضح، مع الحفاظ على أسماء الشركات والرموز كما هي بدون ترجمة. "
+        "أرجع فقط كائن JSON بهذا الشكل: {\"translations\": [\"الترجمة 1\", \"الترجمة 2\", ...]} "
+        "بنفس عدد وترتيب النصوص المُعطاة، بدون أي نص إضافي."
+    )
+    try:
+        response = client.chat.completions.create(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": numbered},
+            ],
+            temperature=0.2,
+            response_format={"type": "json_object"},
+        )
+        data = json.loads(response.choices[0].message.content)
+        translations = data.get("translations", [])
+        if isinstance(translations, list) and len(translations) == len(texts):
+            return translations
+        return texts
+    except Exception:
+        return texts
+
+
 def analyze_news_with_ai(
     openai_api_key: str,
     headline: str,

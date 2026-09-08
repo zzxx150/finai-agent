@@ -123,9 +123,19 @@ with st.sidebar:
     telegram_chat_id = st.text_input("Telegram Chat ID", value=get_secret("TELEGRAM_CHAT_ID", ""))
     enable_telegram = st.checkbox("تفعيل إرسال تنبيه عند العثور على خبر عالي التأثير", value=False)
 
+    st.divider()
+    st.subheader("📱 تنبيهات ntfy (اختياري، بديل مجاني)")
+    ntfy_topic = st.text_input(
+        "اسم قناة ntfy السرية",
+        value=get_secret("NTFY_TOPIC", ""),
+        help="مثال: finai_alerts_boosh_2026_x7k9m",
+    )
+    enable_ntfy = st.checkbox("تفعيل إرسال إشعار ntfy عند العثور على خبر عالي التأثير", value=False)
+
+    st.divider()
     st.markdown("**📨 إرسال رسالة يدوية للجميع**")
     broadcast_text = st.text_area(
-        "اكتب أي نص وأرسله فوراً لكل المشتركين بخانة Chat ID أعلاه",
+        "اكتب أي نص وأرسله فوراً لكل المشتركين (تلغرام و/أو ntfy)",
         key="broadcast_text",
         height=80,
         placeholder="مثال: خبر عاجل، تنبيه شخصي، أو أي رسالة تبي ترسلها...",
@@ -146,15 +156,6 @@ with st.sidebar:
                     st.success(f"✅ تم الإرسال عبر {name}.")
                 else:
                     st.error(f"❌ فشل الإرسال عبر {name} — تأكد من صحة الإعدادات.")
-
-    st.divider()
-    st.subheader("📱 تنبيهات ntfy (اختياري، بديل مجاني)")
-    ntfy_topic = st.text_input(
-        "اسم قناة ntfy السرية",
-        value=get_secret("NTFY_TOPIC", ""),
-        help="مثال: finai_alerts_boosh_2026_x7k9m",
-    )
-    enable_ntfy = st.checkbox("تفعيل إرسال إشعار ntfy عند العثور على خبر عالي التأثير", value=False)
 
     st.divider()
     ai_model = st.selectbox("نموذج الذكاء الاصطناعي", ["gpt-4o-mini", "gpt-4o"], index=0)

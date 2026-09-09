@@ -160,6 +160,10 @@ def check_short_squeeze_potential(snapshot: Dict) -> Dict:
 AI_SYSTEM_PROMPT = """أنت محلل مالي محترف متخصص في تحليل الأخبار اللحظية وأثرها على أسعار الأسهم.
 مهمتك تحليل الخبر المُعطى وإرجاع تحليل دقيق وموجز بصيغة JSON فقط، بدون أي نص إضافي أو Markdown.
 
+قد يُعطى لك أيضاً "سياق السعر الحالي" يتضمن السعر الحالي للسهم ومستويات دعم/مقاومة محسوبة فنياً.
+إذا تم إعطاؤك هذا السياق، استخدمه لتحديد أرقام دخول ووقف خسارة وهدف تقريبية واقعية بناءً عليه
+(وليس مجرد ملاحظات وصفية). إذا لم يتوفر سياق سعر، أعطِ ملاحظات وصفية بدون أرقام كما كان سابقاً.
+
 أرجع حصراً كائن JSON بهذا الشكل بالضبط:
 {
   "summary": "زبدة الخبر في جملتين قصيرتين بالعربية",
@@ -169,9 +173,12 @@ AI_SYSTEM_PROMPT = """أنت محلل مالي محترف متخصص في تحل
   "is_likely_official": true أو false (هل يبدو الخبر بياناً رسمياً/مصدراً موثوقاً أم إشاعة؟),
   "trade_plan": {
     "action": "دخول شراء | دخول بيع (شورت) | انتظار | تجنب",
-    "entry_note": "ملاحظة نصية موجزة عن منطقة الدخول المناسبة (وليس سعراً دقيقاً لأنك لا تملك شارت لحظي)",
-    "stop_loss_note": "ملاحظة موجزة عن منطق وقف الخسارة",
-    "target_note": "ملاحظة موجزة عن الهدف المحتمل",
+    "entry_price": رقم تقريبي لسعر الدخول المقترح إذا توفر سياق السعر، وإلا اتركه null,
+    "stop_loss_price": رقم تقريبي لسعر وقف الخسارة إذا توفر سياق السعر، وإلا اتركه null,
+    "target_price": رقم تقريبي لسعر الهدف إذا توفر سياق السعر، وإلا اتركه null,
+    "entry_note": "ملاحظة نصية موجزة عن منطقة الدخول المناسبة ومنطقها",
+    "stop_loss_note": "ملاحظة موجزة عن منطق وقف الخسارة (مثلاً تحت مستوى الدعم)",
+    "target_note": "ملاحظة موجزة عن الهدف المحتمل ومنطقه (مثلاً عند مستوى المقاومة)",
     "estimated_duration": "تقدير تقريبي جداً لمدة الصفقة حتى الوصول للهدف أو الخروج، اختر واحداً: 'قصيرة (خلال نفس يوم التداول)' أو 'قصيرة-متوسطة (1-3 أيام)' أو 'متوسطة (أسبوع تقريباً)' أو 'طويلة (أسابيع أو أكثر)'. هذا تقدير استرشادي فقط وليس وعداً بزمن دقيق",
     "exit_condition": "متى يجب الخروج من الصفقة (شرط واضح)"
   },
@@ -179,7 +186,37 @@ AI_SYSTEM_PROMPT = """أنت محلل مالي محترف متخصص في تحل
 }
 
 تنبيه: هذا تحليل استرشادي وليس توصية استثمارية مضمونة. كن واقعياً ولا تبالغ.
-تنبيه إضافي: تقدير مدة الصفقة (estimated_duration) هو تخمين تقريبي جداً بناءً على طبيعة الخبر وسوابق مشابهة، وليس تنبؤاً دقيقاً بالوقت — الأسواق قد تتحرك أسرع أو أبطأ من أي تقدير بكثير."""
+تنبيه إضافي: تقدير مدة الصفقة (estimated_duration) هو تخمين تقريبي جداً بناءً على طبيعة الخبر وسوابق مشابهة، وليس تنبؤاً دقيقاً بالوقت — الأسواق قد تتحرك أسرع أو أبطأ من أي تقدير بكثير.
+تنبيه إضافي حول الأسعار: أي أرقام أسعار تعطيها هي تقديرات استرشادية مبنية على بيانات تاريخية ودعم/مقاومة، وليست ضماناً لتحرك السعر الفعلي."""
+
+
+def translate_text_free(text: str, source_lang: str = "en", target_lang: str = "ar") -> str:
+    """
+    يترجم نصاً واحداً مجاناً بالكامل عبر خدمة MyMemory العامة (بدون مفتاح API
+    وبدون أي تكلفة). مناسب لعناوين الأخبار القصيرة. يرجع النص الأصلي لو فشلت
+    الترجمة لأي سبب.
+    """
+    if not text or not text.strip():
+        return text
+    try:
+        r = requests.get(
+            "https://api.mymemory.translated.net/get",
+            params={"q": text[:490], "langpair": f"{source_lang}|{target_lang}"},
+            timeout=8,
+        )
+        r.raise_for_status()
+        data = r.json()
+        translated = data.get("responseData", {}).get("translatedText")
+        if translated and "MYMEMORY WARNING" not in translated.upper():
+            return translated
+        return text
+    except Exception:
+        return text
+
+
+def translate_texts_free(texts: List[str], source_lang: str = "en", target_lang: str = "ar") -> List[str]:
+    """يترجم قائمة نصوص مجاناً، نصاً نصاً (خدمة MyMemory لا تدعم الترجمة الدفعية)."""
+    return [translate_text_free(t, source_lang, target_lang) for t in texts]
 
 
 def translate_texts_to_arabic(
@@ -226,19 +263,32 @@ def analyze_news_with_ai(
     summary: str,
     symbol: Optional[str] = None,
     model: str = "gpt-4o-mini",
+    price_context: Optional[Dict] = None,
 ) -> Dict:
     """
     يرسل الخبر إلى OpenAI ويستقبل تحليلاً منظماً بصيغة JSON.
+    price_context (اختياري): dict فيه current_price, support_20d, resistance_20d
+    يُستخدم لتحديد نقاط دخول/خروج رقمية بدل ملاحظات وصفية فقط.
     """
     if not openai_api_key or OpenAI is None:
         return {"error": "مفتاح OpenAI غير متوفر أو المكتبة غير مثبتة."}
 
     client = OpenAI(api_key=openai_api_key)
 
+    price_block = ""
+    if price_context and "error" not in price_context:
+        price_block = f"""
+سياق السعر الحالي (استخدمه لتحديد أرقام دخول/خروج تقريبية):
+السعر الحالي: {price_context.get('current_price')}
+مستوى الدعم (20 يوم): {price_context.get('support_20d')}
+مستوى المقاومة (20 يوم): {price_context.get('resistance_20d')}
+"""
+
     user_content = f"""
 السهم: {symbol or 'غير محدد'}
 العنوان: {headline}
 تفاصيل إضافية: {summary or 'لا يوجد'}
+{price_block}
 """
 
     try:
@@ -262,13 +312,33 @@ def analyze_news_with_ai(
 # ----------------------------------------------------------------------
 
 HIGH_IMPACT_KEYWORDS = [
-    "acquisition", "acquire", "merger", "buyout", "fda approval", "fda",
-    "earnings beat", "earnings miss", "guidance", "bankruptcy", "lawsuit",
-    "sec investigation", "recall", "partnership", "contract award",
-    "stock split", "dividend increase", "ceo resigns", "ceo steps down",
-    "data breach", "clinical trial", "patent",
+    # صفقات واندماجات
+    "acquisition", "acquire", "acquires", "merger", "buyout", "takeover", "deal to buy",
+    # تنظيمية وقانونية
+    "fda approval", "fda", "sec investigation", "sec probe", "lawsuit", "antitrust",
+    "regulatory", "settlement", "fine", "recall", "investigation", "probe",
+    # أرباح وتوقعات
+    "earnings beat", "earnings miss", "beats estimates", "misses estimates",
+    "guidance", "raises guidance", "cuts guidance", "profit warning", "outlook",
+    "quarterly results", "q1", "q2", "q3", "q4", "revenue beat", "revenue miss",
+    # قرارات إدارية
+    "bankruptcy", "chapter 11", "ceo resigns", "ceo steps down", "ceo fired",
+    "layoffs", "job cuts", "restructuring", "spinoff", "ipo", "delisting",
+    # حركة سعرية قوية
+    "surges", "soars", "plunges", "tumbles", "crashes", "rallies", "sinks",
+    "jumps", "spikes", "record high", "record low", "all-time high",
+    # تحليل ومحللون
+    "price target", "upgrade", "downgrade", "initiates coverage", "analyst",
+    # اتفاقيات وعقود
+    "partnership", "contract award", "government contract", "supply deal",
+    "stock split", "dividend increase", "dividend cut", "buyback", "share repurchase",
+    # تقنية وابتكار
+    "data breach", "clinical trial", "patent", "chip shortage", "ai chip",
+    "product launch", "recall of",
+    # عربي
     "استحواذ", "اندماج", "إفلاس", "دعوى قضائية", "تحقيق", "أرباح",
-    "توقعات", "شراكة", "عقد حكومي", "موافقة", "استقالة",
+    "توقعات", "شراكة", "عقد حكومي", "موافقة", "استقالة", "تراجع", "ارتفاع",
+    "انهيار", "قفزة", "تخفيض", "رفع تصنيف", "خفض تصنيف", "استرداد أسهم",
 ]
 
 
@@ -419,6 +489,9 @@ def init_db() -> None:
                 confidence REAL,
                 is_likely_official INTEGER,
                 action TEXT,
+                entry_price REAL,
+                stop_loss_price REAL,
+                target_price REAL,
                 entry_note TEXT,
                 stop_loss_note TEXT,
                 target_note TEXT,
@@ -429,6 +502,12 @@ def init_db() -> None:
                 created_by TEXT
             )
         """)
+        conn.commit()
+        # إضافة الأعمدة الجديدة تلقائياً لو قاعدة البيانات قديمة (ترقية بدون فقدان بيانات)
+        existing_cols = {row[1] for row in conn.execute("PRAGMA table_info(recommendations)").fetchall()}
+        for col in ["entry_price", "stop_loss_price", "target_price"]:
+            if col not in existing_cols:
+                conn.execute(f"ALTER TABLE recommendations ADD COLUMN {col} REAL")
         conn.commit()
 
 
@@ -454,9 +533,10 @@ def save_recommendation(symbol: str, headline: str, analysis: Dict, created_by: 
         conn.execute("""
             INSERT INTO recommendations
             (symbol, headline, sentiment, impact_level, confidence, is_likely_official,
-             action, entry_note, stop_loss_note, target_note, estimated_duration,
+             action, entry_price, stop_loss_price, target_price,
+             entry_note, stop_loss_note, target_note, estimated_duration,
              exit_condition, score, created_at, created_by)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             symbol,
             headline,
@@ -465,6 +545,9 @@ def save_recommendation(symbol: str, headline: str, analysis: Dict, created_by: 
             analysis.get("confidence"),
             1 if analysis.get("is_likely_official") else 0,
             plan.get("action"),
+            plan.get("entry_price"),
+            plan.get("stop_loss_price"),
+            plan.get("target_price"),
             plan.get("entry_note"),
             plan.get("stop_loss_note"),
             plan.get("target_note"),
@@ -726,3 +809,134 @@ def send_ntfy_alert(topic: str, message: str, title: str = "Financial AI Agent",
         return r.status_code == 200
     except Exception:
         return False
+
+
+# ----------------------------------------------------------------------
+# 15) مستويات الدعم والمقاومة وكشف الاختراق
+# ----------------------------------------------------------------------
+
+def calculate_support_resistance(symbol: str) -> Dict:
+    """
+    يحسب مستويات دعم ومقاومة تقريبية للسهم بناءً على أعلى/أدنى سعر خلال
+    آخر 20 و 50 يوم تداول، ويكشف هل السعر الحالي اخترق أحد هذي المستويات
+    مؤخراً (آخر 3 أيام تداول). هذا حساب فني مبسط (Price Action) وليس
+    تحليلاً فنياً احترافياً كاملاً (مثل Fibonacci أو Pivot Points الدقيقة).
+    """
+    try:
+        t = yf.Ticker(symbol)
+        hist = t.history(period="3mo")
+        if hist.empty or len(hist) < 20:
+            return {"error": "بيانات غير كافية لحساب الدعم والمقاومة."}
+
+        current_price = float(hist["Close"].iloc[-1])
+
+        support_20 = float(hist["Low"].tail(20).min())
+        resistance_20 = float(hist["High"].tail(20).max())
+        support_50 = float(hist["Low"].tail(50).min()) if len(hist) >= 50 else support_20
+        resistance_50 = float(hist["High"].tail(50).max()) if len(hist) >= 50 else resistance_20
+
+        recent = hist.tail(3)
+        broke_resistance = bool((recent["Close"] > resistance_20 * 0.999).any()) and current_price >= resistance_20 * 0.995
+        broke_support = bool((recent["Close"] < support_20 * 1.001).any()) and current_price <= support_20 * 1.005
+
+        if broke_resistance:
+            signal = "🚀 اختراق للأعلى: السعر كسر مستوى المقاومة القريب (20 يوم) مؤخراً"
+        elif broke_support:
+            signal = "⚠️ كسر للأسفل: السعر كسر مستوى الدعم القريب (20 يوم) مؤخراً"
+        else:
+            distance_to_resistance = ((resistance_20 - current_price) / current_price) * 100
+            distance_to_support = ((current_price - support_20) / current_price) * 100
+            signal = (
+                f"يتداول بين الدعم والمقاومة — يبعد {distance_to_resistance:.1f}% عن المقاومة "
+                f"و {distance_to_support:.1f}% فوق الدعم"
+            )
+
+        return {
+            "current_price": round(current_price, 2),
+            "support_20d": round(support_20, 2),
+            "resistance_20d": round(resistance_20, 2),
+            "support_50d": round(support_50, 2),
+            "resistance_50d": round(resistance_50, 2),
+            "signal": signal,
+            "broke_resistance": broke_resistance,
+            "broke_support": broke_support,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# ----------------------------------------------------------------------
+# 16) حالة السوق بتوقيت شرق أمريكا (ET) وتوقيت السعودية (AST) بدقة
+#     باستخدام zoneinfo (يراعي التوقيت الصيفي/الشتوي تلقائياً)
+# ----------------------------------------------------------------------
+
+try:
+    from zoneinfo import ZoneInfo
+    _ET_ZONE = ZoneInfo("America/New_York")
+    _SAUDI_ZONE = ZoneInfo("Asia/Riyadh")
+    _ZONEINFO_OK = True
+except Exception:
+    _ZONEINFO_OK = False
+
+
+def get_market_status_v2() -> Dict:
+    """
+    يحدد حالة السوق الأمريكي الحالية بدقة (مع مراعاة التوقيت الصيفي/الشتوي)،
+    ويعرض الوقت الحالي بتوقيت نيويورك (ET) وبتوقيت السعودية (AST) معاً.
+    """
+    if not _ZONEINFO_OK:
+        return get_market_status()  # احتياطي: النسخة التقريبية القديمة
+
+    now_utc = dt.datetime.now(dt.timezone.utc)
+    now_et = now_utc.astimezone(_ET_ZONE)
+    now_saudi = now_utc.astimezone(_SAUDI_ZONE)
+    today_et = now_et.date()
+    weekday = now_et.weekday()
+
+    result_base = {
+        "now_et": now_et.strftime("%Y-%m-%d %H:%M"),
+        "now_saudi": now_saudi.strftime("%Y-%m-%d %H:%M"),
+    }
+
+    if today_et in US_MARKET_HOLIDAYS_2026:
+        result_base.update({"status": "مغلق (عطلة رسمية)", "detail": US_MARKET_HOLIDAYS_2026[today_et]})
+        return result_base
+
+    if weekday >= 5:
+        result_base.update({"status": "مغلق (عطلة نهاية أسبوع)", "detail": "السوق يفتح يوم الاثنين القادم"})
+        return result_base
+
+    current_time = now_et.strftime("%H:%M")
+    if MARKET_HOURS_ET["pre_market_start"] <= current_time < MARKET_HOURS_ET["pre_market_end"]:
+        status = "ما قبل الافتتاح (Pre-Market)"
+    elif MARKET_HOURS_ET["regular_start"] <= current_time < MARKET_HOURS_ET["regular_end"]:
+        status = "السوق مفتوح (تداول رسمي)"
+    elif MARKET_HOURS_ET["after_hours_start"] <= current_time < MARKET_HOURS_ET["after_hours_end"]:
+        status = "ما بعد الإغلاق (After-Hours)"
+    else:
+        status = "مغلق (خارج أوقات التداول)"
+
+    # نحسب أوقات الجلسات اليوم بتوقيت السعودية (تتحول تلقائياً حسب التوقيت الصيفي/الشتوي)
+    def et_time_to_saudi_str(hhmm: str) -> str:
+        h, m = map(int, hhmm.split(":"))
+        et_dt = now_et.replace(hour=h, minute=m, second=0, microsecond=0)
+        saudi_dt = et_dt.astimezone(_SAUDI_ZONE)
+        return saudi_dt.strftime("%I:%M %p").lstrip("0")
+
+    upcoming_holidays = sorted([d for d in US_MARKET_HOLIDAYS_2026 if d >= today_et])
+    next_holiday = None
+    if upcoming_holidays:
+        next_date = upcoming_holidays[0]
+        next_holiday = {"date": next_date.strftime("%Y-%m-%d"), "name": US_MARKET_HOLIDAYS_2026[next_date]}
+
+    result_base.update({
+        "status": status,
+        "pre_market_hours_saudi": f"{et_time_to_saudi_str(MARKET_HOURS_ET['pre_market_start'])} - {et_time_to_saudi_str(MARKET_HOURS_ET['pre_market_end'])}",
+        "regular_hours_saudi": f"{et_time_to_saudi_str(MARKET_HOURS_ET['regular_start'])} - {et_time_to_saudi_str(MARKET_HOURS_ET['regular_end'])}",
+        "after_hours_saudi": f"{et_time_to_saudi_str(MARKET_HOURS_ET['after_hours_start'])} - {et_time_to_saudi_str(MARKET_HOURS_ET['after_hours_end'])}",
+        "regular_hours": MARKET_HOURS_ET["regular_start"] + " - " + MARKET_HOURS_ET["regular_end"] + " (ET)",
+        "pre_market_hours": MARKET_HOURS_ET["pre_market_start"] + " - " + MARKET_HOURS_ET["pre_market_end"] + " (ET)",
+        "after_hours": MARKET_HOURS_ET["after_hours_start"] + " - " + MARKET_HOURS_ET["after_hours_end"] + " (ET)",
+        "next_holiday": next_holiday,
+    })
+    return result_base

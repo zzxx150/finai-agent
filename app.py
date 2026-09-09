@@ -42,8 +42,11 @@ from utils import (
     check_liquidity_activity,
     fetch_extended_hours_data,
     get_market_status,
+    get_market_status_v2,
+    calculate_support_resistance,
     send_ntfy_alert,
     translate_texts_to_arabic,
+    translate_texts_free,
 )
 
 load_dotenv()
@@ -62,22 +65,22 @@ def get_secret(key: str, default: str = "") -> str:
     return os.getenv(key, default)
 
 
-def get_arabic_translations(texts, openai_api_key: str, model: str = "gpt-4o-mini"):
+def get_arabic_translations(texts, openai_api_key: str = "", model: str = "gpt-4o-mini"):
     """
-    يترجم قائمة نصوص للعربية مع تخزين مؤقت بذاكرة الجلسة (session_state)،
-    بحيث أي عنوان خبر تُرجم مرة ما يُعاد ترجمته مرة ثانية حتى لو تكرر
-    ظهوره بتحديثات لاحقة — توفيراً لرصيد OpenAI.
+    يترجم قائمة نصوص للعربية مجاناً بالكامل (خدمة MyMemory) مع تخزين مؤقت
+    بذاكرة الجلسة (session_state)، بحيث أي عنوان خبر تُرجم مرة ما يُعاد
+    ترجمته مرة ثانية حتى لو تكرر ظهوره بتحديثات لاحقة.
     """
     if "translation_cache" not in st.session_state:
         st.session_state["translation_cache"] = {}
     cache = st.session_state["translation_cache"]
 
-    if not openai_api_key or not texts:
+    if not texts:
         return list(texts)
 
     to_translate = [t for t in texts if t not in cache]
     if to_translate:
-        translated = translate_texts_to_arabic(openai_api_key, to_translate, model=model)
+        translated = translate_texts_free(to_translate)
         for orig, trans in zip(to_translate, translated):
             cache[orig] = trans
 
@@ -195,7 +198,7 @@ st.caption("منصة تحليل الأخبار اللحظية بالذكاء ا�
 # ----------------------------------------------------------------------
 # شريط حالة السوق الأمريكي (مفتوح / ما قبل الافتتاح / ما بعد الإغلاق / عطلة)
 # ----------------------------------------------------------------------
-market_status = get_market_status()
+market_status = get_market_status_v2()
 status_icon = {
     "السوق مفتوح (تداول رسمي)": "🟢",
     "ما قبل الافتتاح (Pre-Market)": "🟡",
@@ -204,7 +207,7 @@ status_icon = {
 
 status_cols = st.columns([2, 2, 2])
 status_cols[0].markdown(f"**{status_icon} حالة السوق:** {market_status['status']}")
-status_cols[1].markdown(f"**🕐 الوقت الآن (ET):** {market_status.get('now_et', '—')}")
+status_cols[1].markdown(f"**🇸🇦 الوقت الآن (السعودية):** {market_status.get('now_saudi', market_status.get('now_et', '—'))}")
 if market_status.get("next_holiday"):
     status_cols[2].markdown(
         f"**📅 أقرب عطلة:** {market_status['next_holiday']['name']} ({market_status['next_holiday']['date']})"
@@ -212,14 +215,20 @@ if market_status.get("next_holiday"):
 elif market_status.get("detail"):
     status_cols[2].markdown(f"**ℹ️ ملاحظة:** {market_status['detail']}")
 
-with st.expander("🕐 أوقات التداول الكاملة بالسوق الأمريكي"):
-    if "regular_hours" in market_status:
+with st.expander("🕐 أوقات التداول الكاملة بالسوق الأمريكي (بتوقيت السعودية)"):
+    if "regular_hours_saudi" in market_status:
+        st.write(f"**ما قبل الافتتاح (Pre-Market):** {market_status['pre_market_hours_saudi']} (توقيت السعودية)")
+        st.write(f"**التداول الرسمي:** {market_status['regular_hours_saudi']} (توقيت السعودية)")
+        st.write(f"**ما بعد الإغلاق (After-Hours):** {market_status['after_hours_saudi']} (توقيت السعودية)")
+        st.caption(f"بتوقيت نيويورك (ET) للمرجعية: {market_status.get('regular_hours', '—')}")
+    elif "regular_hours" in market_status:
         st.write(f"**ما قبل الافتتاح (Pre-Market):** {market_status['pre_market_hours']}")
         st.write(f"**التداول الرسمي:** {market_status['regular_hours']}")
         st.write(f"**ما بعد الإغلاق (After-Hours):** {market_status['after_hours']}")
     st.caption(
-        "⚠️ الأوقات بتوقيت شرق أمريكا (ET) وهي تقريبية (لا تُعدّل تلقائياً بدقة حسب التوقيت الصيفي/الشتوي). "
+        "الأوقات تُحسب تلقائياً مع مراعاة التوقيت الصيفي/الشتوي لكل من نيويورك والسعودية. "
         "الأوقات والعطل معتمدة من الجدول الرسمي لبورصة نيويورك (NYSE) لعام 2026."
+
     )
 
 (
@@ -254,7 +263,7 @@ with tab_dashboard:
     with col_c:
         only_high_impact = st.checkbox("عرض عالي التأثير فقط", value=True)
     with col_d:
-        translate_dashboard = st.checkbox("🌐 ترجمة للعربية", value=bool(openai_key), key="translate_dashboard")
+        translate_dashboard = st.checkbox("🌐 ترجمة للعربية (مجانية)", value=True, key="translate_dashboard")
 
     if st.button("🔄 تحديث الأخبار الآن", type="primary"):
         st.session_state["refresh_news"] = True
@@ -276,9 +285,9 @@ with tab_dashboard:
             # خريطة حرارية مبسطة: تصنيف مبدئي (بدون AI) لكل خبر حسب الكلمات المفتاحية
             display_items = display_items[:30]
             headlines_raw = [item.get("headline", "") for item in display_items]
-            if translate_dashboard and openai_key:
+            if translate_dashboard:
                 with st.spinner("جاري ترجمة العناوين..."):
-                    headlines_ar = get_arabic_translations(headlines_raw, openai_key, model=ai_model)
+                    headlines_ar = get_arabic_translations(headlines_raw)
             else:
                 headlines_ar = headlines_raw
 
@@ -378,6 +387,24 @@ with tab_search:
             sq_cols[1].metric("نسبة الشورت من الفلوت", f"{squeeze_info.get('short_percent_display', '—')}%")
             sq_cols[2].info(squeeze_info["squeeze_potential"])
 
+            # ---- مستويات الدعم والمقاومة ----
+            st.markdown("#### 📐 مستويات الدعم والمقاومة")
+            with st.spinner("جاري حساب الدعم والمقاومة..."):
+                sr_info = calculate_support_resistance(symbol_input)
+            if "error" in sr_info:
+                st.caption(sr_info["error"])
+            else:
+                sr_cols = st.columns(4)
+                sr_cols[0].metric("دعم (20 يوم)", f"${sr_info['support_20d']:.2f}")
+                sr_cols[1].metric("مقاومة (20 يوم)", f"${sr_info['resistance_20d']:.2f}")
+                sr_cols[2].metric("دعم (50 يوم)", f"${sr_info['support_50d']:.2f}")
+                sr_cols[3].metric("مقاومة (50 يوم)", f"${sr_info['resistance_50d']:.2f}")
+                if sr_info.get("broke_resistance") or sr_info.get("broke_support"):
+                    st.warning(sr_info["signal"])
+                else:
+                    st.info(sr_info["signal"])
+            st.caption("حساب فني مبسط بناءً على أعلى/أدنى سعر خلال الفترة، وليس تحليلاً فنياً احترافياً كاملاً.")
+
             # ---- دخول السيولة اللحظي ----
             st.markdown("#### 💧 هل دخلت سيولة على السهم مؤخراً؟")
             with st.spinner("جاري فحص حجم التداول اللحظي..."):
@@ -413,6 +440,48 @@ with tab_search:
                     delta=f"{ext_hours['post_market_change_pct']:.2f}%" if ext_hours.get("post_market_change_pct") else None,
                 )
                 st.caption("تظهر هذي الأسعار فقط خلال ساعات ما قبل الافتتاح أو ما بعد الإغلاق الفعلية، وتختفي أثناء التداول الرسمي.")
+
+            # ---- خلاصة تساعد على اتخاذ القرار ----
+            st.markdown("#### 🧭 خلاصة سريعة تساعدك على القرار")
+            decision_points = []
+            score = 0
+
+            if snapshot.get("change_pct") is not None:
+                if snapshot["change_pct"] > 2:
+                    decision_points.append("✅ السهم في زخم صعودي قوي اليوم")
+                    score += 1
+                elif snapshot["change_pct"] < -2:
+                    decision_points.append("⚠️ السهم في تراجع ملحوظ اليوم")
+                    score -= 1
+
+            if "error" not in sr_info:
+                if sr_info.get("broke_resistance"):
+                    decision_points.append("✅ اخترق مستوى مقاومة مهم مؤخراً")
+                    score += 1
+                elif sr_info.get("broke_support"):
+                    decision_points.append("⚠️ كسر مستوى دعم مهم مؤخراً")
+                    score -= 1
+
+            if squeeze_info.get("low_float") and squeeze_info.get("high_short_interest"):
+                decision_points.append("🔥 فرصة Short Squeeze محتملة (فلوت منخفض + شورت مرتفع)")
+                score += 1
+
+            if "error" not in liquidity_info and "الآن" in liquidity_info.get("status", ""):
+                decision_points.append("💧 دخلت سيولة ملحوظة على السهم الآن")
+                score += 1
+
+            if not decision_points:
+                st.info("لا توجد إشارات قوية واضحة حالياً — السهم يتداول بشكل طبيعي بدون مؤشرات استثنائية.")
+            else:
+                for point in decision_points:
+                    st.write(point)
+                if score >= 2:
+                    st.success("📈 الإشارات مجتمعة تميل نحو الإيجابية — قد تستحق مراقبة أقرب للدخول.")
+                elif score <= -2:
+                    st.error("📉 الإشارات مجتمعة تميل نحو السلبية — يُفضّل الحذر.")
+                else:
+                    st.info("الإشارات متضاربة أو محايدة — يُفضّل انتظار وضوح أكبر قبل القرار.")
+            st.caption("هذي خلاصة آلية بسيطة من عدة مؤشرات، وليست توصية استثمارية نهائية.")
 
             # ---- الشارت التفاعلي (TradingView Widget) ----
             st.markdown("#### 📊 الشارت التفاعلي (TradingView)")
@@ -455,11 +524,8 @@ with tab_search:
                     st.info("لا توجد أخبار حديثة لهذا السهم.")
                 else:
                     news_headlines_raw = [n.get("headline", "بدون عنوان") for n in company_news]
-                    if openai_key:
-                        with st.spinner("جاري ترجمة العناوين..."):
-                            news_headlines_ar = get_arabic_translations(news_headlines_raw, openai_key, model=ai_model)
-                    else:
-                        news_headlines_ar = news_headlines_raw
+                    with st.spinner("جاري ترجمة العناوين..."):
+                        news_headlines_ar = get_arabic_translations(news_headlines_raw)
 
                     for idx, news in enumerate(company_news):
                         headline = news.get("headline", "بدون عنوان")
@@ -479,12 +545,14 @@ with tab_search:
                             else:
                                 if st.button("🤖 حلّل هذا الخبر بالذكاء الاصطناعي", key=f"analyze_{idx}"):
                                     with st.spinner("جاري التحليل..."):
+                                        price_ctx = sr_info if "error" not in sr_info else None
                                         analysis = analyze_news_with_ai(
                                             openai_key,
                                             headline=headline,
                                             summary=news.get("summary", ""),
                                             symbol=symbol_input,
                                             model=ai_model,
+                                            price_context=price_ctx,
                                         )
                                     if "error" in analysis:
                                         st.error(analysis["error"])
@@ -510,6 +578,11 @@ with tab_search:
 
                                         plan = analysis.get("trade_plan", {})
                                         st.markdown("##### 🎯 خطة التداول المقترحة (استرشادية)")
+                                        if plan.get("entry_price") and plan.get("stop_loss_price") and plan.get("target_price"):
+                                            pc1, pc2, pc3 = st.columns(3)
+                                            pc1.metric("📍 سعر الدخول", f"${plan['entry_price']}")
+                                            pc2.metric("🛑 وقف الخسارة", f"${plan['stop_loss_price']}")
+                                            pc3.metric("🎯 الهدف", f"${plan['target_price']}")
                                         st.write(f"**الإجراء:** {plan.get('action', '—')}")
                                         st.write(f"**منطقة الدخول:** {plan.get('entry_note', '—')}")
                                         st.write(f"**وقف الخسارة:** {plan.get('stop_loss_note', '—')}")
@@ -574,19 +647,34 @@ with tab_monitor:
         elif watch_scope == "أسهم محددة":
             symbols = [s.strip().upper() for s in watch_symbols_text.split(",") if s.strip()][:15]
             newly_found = []
+            fallback_candidates = []
             with st.spinner(f"جاري فحص {len(symbols)} سهم..."):
                 for sym in symbols:
-                    items = fetch_company_news(finnhub_key, sym, days_back=1, limit=5)
+                    items = fetch_company_news(finnhub_key, sym, days_back=2, limit=10)
                     for item in items:
                         if "error" in item:
                             continue
+                        item["_symbol"] = sym
                         fp = news_fingerprint(item)
                         if fp in st.session_state["seen_news_fp"]:
                             continue
                         st.session_state["seen_news_fp"].add(fp)
                         if classify_news_impact(item.get("headline", "")) == "مرشّح (High Impact)":
-                            item["_symbol"] = sym
                             newly_found.append(item)
+                        else:
+                            fallback_candidates.append(item)
+
+            # احتياطي: لو ما فيه أي خبر "قوي" اليوم، نحلل أحدث خبر عادي مرة وحدة
+            # باليوم عشان تضمن توصية واحدة على الأقل يومياً (فقط لو التحليل التلقائي مفعّل)
+            today_str = dt.date.today().isoformat()
+            if (
+                enable_auto_ai and openai_key and not newly_found
+                and fallback_candidates
+                and st.session_state.get("last_fallback_date") != today_str
+            ):
+                pick = max(fallback_candidates, key=lambda x: x.get("datetime", 0))
+                newly_found.append(pick)
+                st.session_state["last_fallback_date"] = today_str
         else:
             newly_found = []
             with st.spinner("جاري فحص أخبار السوق العام..."):
@@ -606,9 +694,7 @@ with tab_monitor:
         if newly_found is not None:
 
             for item in newly_found:
-                headline_ar = item["headline"]
-                if openai_key:
-                    headline_ar = get_arabic_translations([item["headline"]], openai_key, model=ai_model)[0]
+                headline_ar = get_arabic_translations([item["headline"]])[0]
 
                 st.toast(f"🚨 {item['_symbol']}: {headline_ar[:60]}", icon="🚨")
 
@@ -619,8 +705,12 @@ with tab_monitor:
                     send_ntfy_alert(ntfy_topic, news_msg, title=f"🚨 خبر قوي: {item['_symbol']}", priority=4)
 
                 if enable_auto_ai and openai_key:
+                    price_ctx = None
+                    if item["_symbol"] not in ("خبر عام",):
+                        price_ctx = calculate_support_resistance(item["_symbol"])
                     analysis = analyze_news_with_ai(
-                        openai_key, item["headline"], item.get("summary", ""), item["_symbol"], model=ai_model,
+                        openai_key, item["headline"], item.get("summary", ""), item["_symbol"],
+                        model=ai_model, price_context=price_ctx,
                     )
                     if "error" not in analysis:
                         save_recommendation(
@@ -628,9 +718,16 @@ with tab_monitor:
                             created_by=st.session_state.get("username", "system"),
                         )
                         plan = analysis.get("trade_plan", {})
+                        entry_p = plan.get("entry_price")
+                        sl_p = plan.get("stop_loss_price")
+                        tp_p = plan.get("target_price")
+                        price_line = ""
+                        if entry_p and sl_p and tp_p:
+                            price_line = f"📍 دخول: ${entry_p} | وقف: ${sl_p} | هدف: ${tp_p}\n"
                         rec_msg = (
                             f"🎯 توصية جديدة: {item['_symbol']}\n"
                             f"الإجراء: {plan.get('action', '—')}\n"
+                            f"{price_line}"
                             f"الدخول: {plan.get('entry_note', '—')}\n"
                             f"وقف الخسارة: {plan.get('stop_loss_note', '—')}\n"
                             f"الهدف: {plan.get('target_note', '—')}\n"

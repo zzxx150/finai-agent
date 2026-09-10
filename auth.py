@@ -2,7 +2,9 @@
 auth.py
 -------
 نظام تسجيل دخول بسيط ومستقل (بدون مكتبات خارجية معقدة) لدعم أكثر من مستخدم.
-كلمات المرور تُحفظ كـ SHA-256 hash داخل auth_config.yaml — لا تُحفظ كنص صريح أبداً.
+كلمات المرور تُحفظ كـ SHA-256 hash — إما داخل auth_config.yaml (حسابات ثابتة
+مثل المدير)، أو بقاعدة البيانات finai.db (حسابات سجّلها المستخدمون بأنفسهم
+عبر رمز دعوة). لا تُحفظ كلمات المرور كنص صريح أبداً في أي مكان.
 """
 
 import hashlib
@@ -27,13 +29,30 @@ def load_users() -> dict:
 def verify_login(username: str, password: str) -> bool:
     if not username or not password:
         return False
+
+    # 1) تحقق من الحسابات الثابتة (auth_config.yaml)
     users = load_users()
     user = users.get(username)
-    if not user:
-        return False
-    return user.get("password_hash") == hash_password(password)
+    if user:
+        return user.get("password_hash") == hash_password(password)
+
+    # 2) تحقق من الحسابات ذاتية التسجيل (قاعدة البيانات)
+    from utils import get_app_user  # استيراد محلي لتفادي أي تبعية دائرية
+    db_user = get_app_user(username)
+    if db_user:
+        return db_user.get("password_hash") == hash_password(password)
+
+    return False
 
 
 def get_display_name(username: str) -> str:
     users = load_users()
-    return users.get(username, {}).get("name", username)
+    if username in users:
+        return users[username].get("name", username)
+
+    from utils import get_app_user
+    db_user = get_app_user(username)
+    if db_user:
+        return db_user.get("name", username)
+
+    return username

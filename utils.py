@@ -1108,3 +1108,53 @@ def get_market_status_v2() -> Dict:
         "next_holiday": next_holiday,
     })
     return result_base
+
+
+# ----------------------------------------------------------------------
+# 20) حسابات مستخدمين ذاتية التسجيل (عبر رمز دعوة) — تُحفظ بقاعدة البيانات
+# ----------------------------------------------------------------------
+
+def init_users_db() -> None:
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS app_users (
+                username TEXT PRIMARY KEY,
+                name TEXT,
+                password_hash TEXT,
+                created_at TEXT
+            )
+        """)
+        conn.commit()
+
+
+def create_app_user(username: str, name: str, password_hash: str) -> bool:
+    """يسجّل مستخدماً جديداً. يرجع False لو اسم المستخدم محجوز مسبقاً."""
+    init_users_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        try:
+            conn.execute(
+                "INSERT INTO app_users (username, name, password_hash, created_at) VALUES (?,?,?,?)",
+                (username, name, password_hash, dt.datetime.now().isoformat(timespec="seconds")),
+            )
+            conn.commit()
+            return True
+        except sqlite3.IntegrityError:
+            return False
+
+
+def get_app_user(username: str) -> Optional[Dict]:
+    init_users_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute("SELECT * FROM app_users WHERE username = ?", (username,)).fetchone()
+        return dict(row) if row else None
+
+
+def list_app_users() -> List[Dict]:
+    init_users_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT username, name, created_at FROM app_users ORDER BY created_at DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]

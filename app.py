@@ -93,6 +93,25 @@ def get_arabic_translations(texts, openai_api_key: str = "", model: str = "gpt-4
     return [cache.get(t, t) for t in texts]
 
 
+def suppress_short_if_disabled(analysis: dict, shorts_enabled: bool) -> dict:
+    """
+    لو توصيات الشورت معطّلة بإعدادات المستخدم، يحوّل أي توصية 'دخول بيع (شورت)'
+    إلى 'انتظار' مع توضيح السبب، بدل ما يعرضها أو يحفظها كصفقة قابلة للتنفيذ.
+    """
+    if shorts_enabled:
+        return analysis
+    plan = analysis.get("trade_plan", {})
+    action = plan.get("action", "")
+    if "بيع" in action or "شورت" in action:
+        plan["action"] = "انتظار (توصية شورت مُعطّلة بإعداداتك)"
+        plan["entry_note"] = "تم تعطيل توصيات البيع على المكشوف من الشريط الجانبي — فعّلها لو تبي تشوف هذا النوع من التوصيات."
+        plan["entry_price"] = None
+        plan["stop_loss_price"] = None
+        plan["target_price"] = None
+        analysis["trade_plan"] = plan
+    return analysis
+
+
 st.set_page_config(
     page_title="Financial AI Agent",
     page_icon="📈",
@@ -230,6 +249,15 @@ with st.sidebar:
 
     st.divider()
     ai_model = st.selectbox("نموذج الذكاء الاصطناعي", ["gpt-4o-mini", "gpt-4o"], index=0)
+
+    st.divider()
+    enable_shorts = st.checkbox(
+        "🔻 تفعيل توصيات البيع على المكشوف (شورت)",
+        value=False,
+        help="مطفّي افتراضياً. البيع على المكشوف يحتاج حساب هامش (Margin Account) "
+             "عند وسيطك، وخسارته المحتملة غير محدودة نظرياً (بعكس الشراء العادي). "
+             "لا تفعّله إلا لو متأكد إن حسابك يدعمه وفاهم المخاطرة.",
+    )
 
     st.divider()
     st.caption("⚠️ هذه المنصة أداة استرشادية تعليمية وليست توصية استثمارية. القرار والمسؤولية تقع على المتداول.")
@@ -602,6 +630,7 @@ with tab_search:
                                     if "error" in analysis:
                                         st.error(analysis["error"])
                                     else:
+                                        analysis = suppress_short_if_disabled(analysis, enable_shorts)
                                         save_recommendation(
                                             symbol_input, headline, analysis,
                                             created_by=st.session_state.get("username", "system"),
@@ -767,6 +796,7 @@ with tab_monitor:
                         model=ai_model, price_context=price_ctx,
                     )
                     if "error" not in analysis:
+                        analysis = suppress_short_if_disabled(analysis, enable_shorts)
                         save_recommendation(
                             item["_symbol"], item["headline"], analysis,
                             created_by=st.session_state.get("username", "system"),

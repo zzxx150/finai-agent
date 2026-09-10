@@ -23,7 +23,7 @@ import streamlit.components.v1 as components
 from dotenv import load_dotenv
 from streamlit_autorefresh import st_autorefresh
 
-from auth import verify_login, get_display_name
+from auth import verify_login, get_display_name, hash_password
 from utils import (
     fetch_market_news,
     fetch_company_news,
@@ -51,6 +51,8 @@ from utils import (
     get_analyst_consensus,
     check_and_update_open_recommendations,
     get_win_rate_stats,
+    create_app_user,
+    get_app_user,
 )
 
 load_dotenv()
@@ -108,17 +110,56 @@ if "authenticated" not in st.session_state:
 if not st.session_state["authenticated"]:
     st.title("🔐 تسجيل الدخول")
     st.caption("منصة Financial AI Agent — الدخول مقتصر على المستخدمين المصرّح لهم")
-    with st.form("login_form"):
-        login_user = st.text_input("اسم المستخدم")
-        login_pass = st.text_input("كلمة المرور", type="password")
-        submitted = st.form_submit_button("دخول", type="primary", use_container_width=True)
-    if submitted:
-        if verify_login(login_user, login_pass):
-            st.session_state["authenticated"] = True
-            st.session_state["username"] = login_user
-            st.rerun()
+
+    login_tab, signup_tab = st.tabs(["دخول", "🆕 حساب جديد"])
+
+    with login_tab:
+        with st.form("login_form"):
+            login_user = st.text_input("اسم المستخدم")
+            login_pass = st.text_input("كلمة المرور", type="password")
+            submitted = st.form_submit_button("دخول", type="primary", use_container_width=True)
+        if submitted:
+            if verify_login(login_user, login_pass):
+                st.session_state["authenticated"] = True
+                st.session_state["username"] = login_user
+                st.rerun()
+            else:
+                st.error("اسم المستخدم أو كلمة المرور غير صحيحة.")
+
+    with signup_tab:
+        signup_code_required = get_secret("SIGNUP_CODE", "")
+        if not signup_code_required:
+            st.info("إنشاء حساب جديد غير مفعّل حالياً. تواصل مع صاحب المنصة.")
         else:
-            st.error("اسم المستخدم أو كلمة المرور غير صحيحة.")
+            st.caption("اطلب رمز الدعوة من صاحب المنصة قبل التسجيل.")
+            with st.form("signup_form"):
+                new_username = st.text_input("اسم المستخدم الجديد (بالإنجليزي، بدون مسافات)")
+                new_name = st.text_input("اسمك (يظهر بالترحيب)")
+                new_pass = st.text_input("كلمة المرور", type="password")
+                new_pass_confirm = st.text_input("تأكيد كلمة المرور", type="password")
+                invite_code = st.text_input("رمز الدعوة", type="password")
+                signup_submitted = st.form_submit_button("إنشاء الحساب", type="primary", use_container_width=True)
+
+            if signup_submitted:
+                if invite_code != signup_code_required:
+                    st.error("رمز الدعوة غير صحيح.")
+                elif not new_username or not new_pass:
+                    st.error("لازم تعبّي اسم المستخدم وكلمة المرور.")
+                elif " " in new_username:
+                    st.error("اسم المستخدم ما يقبل مسافات.")
+                elif new_pass != new_pass_confirm:
+                    st.error("كلمتا المرور غير متطابقتين.")
+                elif len(new_pass) < 6:
+                    st.error("كلمة المرور لازم تكون 6 أحرف على الأقل.")
+                elif get_app_user(new_username) or new_username in ["admin"]:
+                    st.error("اسم المستخدم محجوز، اختر اسماً ثانياً.")
+                else:
+                    created = create_app_user(new_username, new_name or new_username, hash_password(new_pass))
+                    if created:
+                        st.success("✅ تم إنشاء الحساب بنجاح! روح لتبويب 'دخول' وسجّل دخولك الآن.")
+                    else:
+                        st.error("اسم المستخدم محجوز، اختر اسماً ثانياً.")
+
     st.stop()
 
 # ----------------------------------------------------------------------
@@ -625,9 +666,18 @@ with tab_monitor:
 
     if watch_scope == "أسهم محددة":
         watch_symbols_text = st.text_input(
-            "رموز الأسهم المراقَبة (مفصولة بفاصلة، بحد أقصى 15 رمزاً لتفادي حدود Finnhub المجانية)",
-            value="AAPL,NVDA,TSLA,MSFT,AMZN,GOOGL,META,AMD",
-            key="watch_symbols",
+            "رموز الأسهم المراقَبة (مفصولة بفاصلة، بحد أقصى 50 رمزاً)",
+            value=(
+                "AAPL,NVDA,TSLA,MSFT,AMZN,GOOGL,META,AMD,NFLX,AVGO,"
+                "INTC,PLTR,F,SOFI,RIVN,LCID,NIO,PLUG,SNAP,UBER,"
+                "BA,DIS,PYPL,COIN,MARA,RIOT,MSTR,SMCI,ORCL,CRM,"
+                "ADBE,QCOM,MU,CSCO,PFE,XOM,CVX,WMT,KO,PEP,"
+                "JPM,BAC,GS,V,MA,T,VZ,GM,DAL,AAL"
+            ),
+        )
+        st.caption(
+            "⚠️ Finnhub المجاني يسمح بـ 60 طلب بالدقيقة. مراقبة 50 سهم كل دقيقة تستهلك قريب من الحد بالكامل — "
+            "لو ظهرت رسائل خطأ متقطعة، قلّل عدد الأسهم أو تجنب استخدام تبويبات ثانية بنفس الوقت."
         )
     else:
         st.caption(
@@ -649,7 +699,7 @@ with tab_monitor:
         if not finnhub_key:
             st.warning("أدخل مفتاح Finnhub من الشريط الجانبي لتفعيل المراقبة.")
         elif watch_scope == "أسهم محددة":
-            symbols = [s.strip().upper() for s in watch_symbols_text.split(",") if s.strip()][:15]
+            symbols = [s.strip().upper() for s in watch_symbols_text.split(",") if s.strip()][:50]
             newly_found = []
             fallback_candidates = []
             with st.spinner(f"جاري فحص {len(symbols)} سهم..."):

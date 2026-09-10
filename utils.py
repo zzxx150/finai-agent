@@ -508,6 +508,8 @@ def init_db() -> None:
         for col in ["entry_price", "stop_loss_price", "target_price"]:
             if col not in existing_cols:
                 conn.execute(f"ALTER TABLE recommendations ADD COLUMN {col} REAL")
+        if "status" not in existing_cols:
+            conn.execute("ALTER TABLE recommendations ADD COLUMN status TEXT")
         conn.commit()
 
 
@@ -814,6 +816,172 @@ def send_ntfy_alert(topic: str, message: str, title: str = "Financial AI Agent",
 # ----------------------------------------------------------------------
 # 15) مستويات الدعم والمقاومة وكشف الاختراق
 # ----------------------------------------------------------------------
+
+# ----------------------------------------------------------------------
+# 17) مؤشرات فنية: RSI و MACD
+# ----------------------------------------------------------------------
+
+def calculate_technical_indicators(symbol: str) -> Dict:
+    """
+    يحسب مؤشر القوة النسبية (RSI-14) وتقاطع MACD من بيانات يومية تاريخية.
+    حساب قياسي معروف بدون مكتبات خارجية إضافية.
+    """
+    try:
+        t = yf.Ticker(symbol)
+        hist = t.history(period="6mo")
+        if hist.empty or len(hist) < 35:
+            return {"error": "بيانات غير كافية لحساب المؤشرات الفنية."}
+
+        close = hist["Close"]
+
+        # RSI (14)
+        delta = close.diff()
+        gain = delta.where(delta > 0, 0.0)
+        loss = -delta.where(delta < 0, 0.0)
+        avg_gain = gain.rolling(window=14).mean()
+        avg_loss = loss.rolling(window=14).mean()
+        rs = avg_gain / avg_loss.replace(0, 1e-10)
+        rsi = 100 - (100 / (1 + rs))
+        latest_rsi = float(rsi.iloc[-1])
+
+        if latest_rsi >= 70:
+            rsi_label = "🔴 تشبّع شرائي (Overbought) — قد يشهد تصحيحاً"
+        elif latest_rsi <= 30:
+            rsi_label = "🟢 تشبّع بيعي (Oversold) — قد يشهد ارتداداً"
+        else:
+            rsi_label = "⚪ منطقة محايدة"
+
+        # MACD (12, 26, 9)
+        ema12 = close.ewm(span=12, adjust=False).mean()
+        ema26 = close.ewm(span=26, adjust=False).mean()
+        macd_line = ema12 - ema26
+        signal_line = macd_line.ewm(span=9, adjust=False).mean()
+
+        macd_now, signal_now = float(macd_line.iloc[-1]), float(signal_line.iloc[-1])
+        macd_prev, signal_prev = float(macd_line.iloc[-2]), float(signal_line.iloc[-2])
+
+        if macd_prev <= signal_prev and macd_now > signal_now:
+            macd_signal = "🟢 تقاطع إيجابي حديث (MACD فوق خط الإشارة) — إشارة صعودية محتملة"
+        elif macd_prev >= signal_prev and macd_now < signal_now:
+            macd_signal = "🔴 تقاطع سلبي حديث (MACD تحت خط الإشارة) — إشارة هبوطية محتملة"
+        elif macd_now > signal_now:
+            macd_signal = "⚪ MACD فوق خط الإشارة (زخم إيجابي مستمر)"
+        else:
+            macd_signal = "⚪ MACD تحت خط الإشارة (زخم سلبي مستمر)"
+
+        return {
+            "rsi": round(latest_rsi, 1),
+            "rsi_label": rsi_label,
+            "macd_signal": macd_signal,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# ----------------------------------------------------------------------
+# 18) إجماع المحللين (Analyst Consensus) من ياهو فايننس عبر yfinance
+# ----------------------------------------------------------------------
+
+def get_analyst_consensus(symbol: str) -> Dict:
+    """
+    يجلب متوسط سعر مستهدف من المحللين وتوصيتهم العامة (شراء/بيع/محايد)
+    إن كانت متوفرة عبر ياهو فايننس. تتوفر عادة للأسهم الكبيرة والمتوسطة فقط.
+    """
+    try:
+        t = yf.Ticker(symbol)
+        info = t.info if hasattr(t, "info") else {}
+
+        recommendation_map = {
+            "strong_buy": "شراء قوي", "buy": "شراء", "hold": "محايد",
+            "sell": "بيع", "strong_sell": "بيع قوي", "none": "غير متوفر",
+        }
+        rec_key = info.get("recommendationKey", "none")
+
+        return {
+            "target_mean": info.get("targetMeanPrice"),
+            "target_high": info.get("targetHighPrice"),
+            "target_low": info.get("targetLowPrice"),
+            "recommendation": recommendation_map.get(rec_key, rec_key),
+            "num_analysts": info.get("numberOfAnalystOpinions"),
+            "current_price": info.get("currentPrice") or info.get("regularMarketPrice"),
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# ----------------------------------------------------------------------
+# 19) تتبع دقة أداء التوصيات فعلياً (Win Rate) — شفافية بدل الوعود
+# ----------------------------------------------------------------------
+
+def update_recommendation_status(rec_id: int, status: str) -> None:
+    init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("UPDATE recommendations SET status = ? WHERE id = ?", (status, rec_id))
+        conn.commit()
+
+
+def check_and_update_open_recommendations() -> Dict:
+    """
+    يفحص كل التوصيات المفتوحة (status فارغ) اللي فيها أسعار دخول/وقف/هدف رقمية،
+    يقارنها بالسعر الحالي الفعلي، ويحدّث حالتها تلقائياً (تحقق الهدف / ضرب وقف
+    الخسارة / لسا مفتوحة). يرجع ملخص بعدد ما تحدّث.
+    """
+    init_db()
+    updated = {"hit_target": 0, "hit_stop": 0, "still_open": 0, "checked": 0}
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("""
+            SELECT * FROM recommendations
+            WHERE (status IS NULL OR status = '' OR status = 'open')
+            AND entry_price IS NOT NULL AND stop_loss_price IS NOT NULL AND target_price IS NOT NULL
+        """).fetchall()
+
+    for row in rows:
+        updated["checked"] += 1
+        snap = fetch_stock_snapshot(row["symbol"])
+        current_price = snap.get("current_price")
+        if current_price is None:
+            continue
+
+        is_short = "بيع" in (row["action"] or "")
+        new_status = None
+        if is_short:
+            if current_price <= row["target_price"]:
+                new_status = "hit_target"
+            elif current_price >= row["stop_loss_price"]:
+                new_status = "hit_stop"
+        else:
+            if current_price >= row["target_price"]:
+                new_status = "hit_target"
+            elif current_price <= row["stop_loss_price"]:
+                new_status = "hit_stop"
+
+        if new_status:
+            update_recommendation_status(row["id"], new_status)
+            updated[new_status] += 1
+        else:
+            updated["still_open"] += 1
+
+    return updated
+
+
+def get_win_rate_stats() -> Dict:
+    """يحسب نسبة نجاح التوصيات المغلقة (اللي تحقق فيها الهدف أو ضرب وقف الخسارة فعلياً)."""
+    init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        hits = conn.execute("SELECT COUNT(*) FROM recommendations WHERE status = 'hit_target'").fetchone()[0]
+        stops = conn.execute("SELECT COUNT(*) FROM recommendations WHERE status = 'hit_stop'").fetchone()[0]
+        open_count = conn.execute(
+            "SELECT COUNT(*) FROM recommendations WHERE status IS NULL OR status = '' OR status = 'open'"
+        ).fetchone()[0]
+
+    total_closed = hits + stops
+    win_rate = round((hits / total_closed) * 100, 1) if total_closed > 0 else None
+    return {
+        "hit_target": hits, "hit_stop": stops, "still_open": open_count,
+        "total_closed": total_closed, "win_rate": win_rate,
+    }
+
 
 def calculate_support_resistance(symbol: str) -> Dict:
     """

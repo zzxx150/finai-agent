@@ -47,6 +47,10 @@ from utils import (
     send_ntfy_alert,
     translate_texts_to_arabic,
     translate_texts_free,
+    calculate_technical_indicators,
+    get_analyst_consensus,
+    check_and_update_open_recommendations,
+    get_win_rate_stats,
 )
 
 load_dotenv()

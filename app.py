@@ -694,15 +694,39 @@ with tab_monitor:
     )
 
     if watch_scope == "أسهم محددة":
-        watch_symbols_text = st.text_input(
-            "رموز الأسهم المراقَبة (مفصولة بفاصلة، بحد أقصى 50 رمزاً)",
-            value=(
+        if "watch_symbols_input" not in st.session_state:
+            st.session_state["watch_symbols_input"] = (
                 "AAPL,NVDA,TSLA,MSFT,AMZN,GOOGL,META,AMD,NFLX,AVGO,"
                 "INTC,PLTR,F,SOFI,RIVN,LCID,NIO,PLUG,SNAP,UBER,"
                 "BA,DIS,PYPL,COIN,MARA,RIOT,MSTR,SMCI,ORCL,CRM,"
                 "ADBE,QCOM,MU,CSCO,PFE,XOM,CVX,WMT,KO,PEP,"
                 "JPM,BAC,GS,V,MA,T,VZ,GM,DAL,AAL"
-            ),
+            )
+
+        preset_col1, preset_col2 = st.columns(2)
+        with preset_col1:
+            if st.button("📋 القائمة الافتراضية (الأكثر تداولاً)", use_container_width=True):
+                st.session_state["watch_symbols_input"] = (
+                    "AAPL,NVDA,TSLA,MSFT,AMZN,GOOGL,META,AMD,NFLX,AVGO,"
+                    "INTC,PLTR,F,SOFI,RIVN,LCID,NIO,PLUG,SNAP,UBER,"
+                    "BA,DIS,PYPL,COIN,MARA,RIOT,MSTR,SMCI,ORCL,CRM,"
+                    "ADBE,QCOM,MU,CSCO,PFE,XOM,CVX,WMT,KO,PEP,"
+                    "JPM,BAC,GS,V,MA,T,VZ,GM,DAL,AAL"
+                )
+        with preset_col2:
+            if st.button("💰 أسهم أمريكية أقل من $10 (تقريبية)", use_container_width=True):
+                st.session_state["watch_symbols_input"] = (
+                    "NOK,GSAT,PLUG,FCEL,BLNK,CHPT,MVIS,NNDM,SNDL,TLRY,"
+                    "CGC,ACB,OPEN,WOLF,RGTI,QUBT,BBAI,SOUN,JOBY,ACHR,"
+                    "LAZR,GOEV,NKLA,RIVN,LCID,NIO,XPEV,VALE,KGC,HL,"
+                    "NGD,PBR,DNA,CLNE,GEVO,UUUU,MARA,RIOT,HUT,BTBT,"
+                    "CIFR,CLSK,SPCE,IQ,ASTS,OCGN,GPRO,BB,AMC,SIRI"
+                )
+                st.caption("⚠️ هذي قائمة تقريبية بناءً على أسعار معروفة تاريخياً — تأكد من الأسعار الحالية الفعلية من تبويب 'متابعة سريعة' لأن أسعار الأسهم الرخيصة تتقلب بسرعة وقد يتجاوز بعضها 10$ فعلياً الآن.")
+
+        watch_symbols_text = st.text_input(
+            "رموز الأسهم المراقَبة (مفصولة بفاصلة، بحد أقصى 50 رمزاً)",
+            key="watch_symbols_input",
         )
         st.caption(
             "⚠️ Finnhub المجاني يسمح بـ 60 طلب بالدقيقة. مراقبة 50 سهم كل دقيقة تستهلك قريب من الحد بالكامل — "

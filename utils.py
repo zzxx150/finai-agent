@@ -632,55 +632,58 @@ def fetch_top_gainers(limit: int = 15) -> List[Dict]:
 def fetch_stocks_under_price(max_price: float = 10.0, limit: int = 50) -> List[Dict]:
     """
     يجلب ديناميكياً قائمة أسهم أمريكية حقيقية سعرها الحالي الفعلي أقل من
-    max_price، مرتبة حسب حجم التداول (الأكثر سيولة أولاً)، عبر محرك فلترة
-    ياهو فايننس غير الرسمي. يُنفَّذ هذا الطلب من جديد في كل مرة (كل دقيقة
-    مع المراقبة التلقائية)، فيضمن إن كل رمز بالقائمة فعلاً تحت السعر المحدد
-    وقت الفحص، بدل قائمة تخمينية ثابتة.
-    ملاحظة: نقطة بيانات غير موثّقة رسمياً من ياهو، وقد تتوقف أو تتغيّر لاحقاً.
-    """
-    url = "https://query1.finance.yahoo.com/v1/finance/screener"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
-        "Content-Type": "application/json",
-    }
-    body = {
-        "size": limit,
-        "offset": 0,
-        "sortType": "DESC",
-        "sortField": "dayvolume",
-        "quoteType": "EQUITY",
-        "query": {
-            "operator": "AND",
-            "operands": [
-                {"operator": "LT", "operands": ["intradayprice", max_price]},
-                {"operator": "GT", "operands": ["intradayprice", 0.1]},
-                {"operator": "EQ", "operands": ["region", "us"]},
-            ],
-        },
-    }
-    try:
-        r = requests.post(url, headers=headers, json=body, timeout=12)
-        r.raise_for_status()
-        data = r.json()
-        quotes = data.get("finance", {}).get("result", [{}])[0].get("quotes", [])
-        if not quotes:
-            return [{"error": "ما رجعت الخدمة أي نتائج حالياً (قد تكون خارج أوقات التداول)."}]
+    max_price، مرتبة حسب حجم التداول (الأكثر سيولة أولاً). يعتمد على نفس
+    نقطة "القوائم الجاهزة" المستخدمة بدالة fetch_top_gainers (وهي الشغّالة
+    فعلياً)، ويجمع نتائج عدة قوائم جاهزة (الأكثر تداولاً، الأكثر ربحاً،
+    الأكثر خسارة، الشركات الصغيرة الصاعدة)، ثم يفلتر النتائج بنفسه محلياً
+    للاحتفاظ فقط بالأسهم اللي سعرها الفعلي أقل من max_price وقت الفحص.
 
-        rows = []
-        for q in quotes[:limit]:
-            symbol = q.get("symbol")
-            if not symbol:
-                continue
-            rows.append({
-                "symbol": symbol,
-                "name": q.get("shortName", symbol),
-                "price": q.get("regularMarketPrice"),
-                "change_pct": q.get("regularMarketChangePercent"),
-                "volume": q.get("regularMarketVolume"),
-            })
-        return rows
-    except Exception as e:
-        return [{"error": f"تعذر جلب القائمة الديناميكية (المصدر غير رسمي وقد يكون تغيّر): {e}"}]
+    يُنفَّذ هذا الطلب من جديد في كل مرة (كل دقيقة مع المراقبة التلقائية)،
+    فيضمن إن كل رمز بالقائمة فعلاً تحت السعر المحدد وقت الفحص، بدل قائمة
+    تخمينية ثابتة. ملاحظة: يعتمد على نقطة بيانات غير موثّقة رسمياً من
+    ياهو، وقد تتوقف أو تتغيّر لاحقاً.
+    """
+    url = "https://query1.finance.yahoo.com/v1/finance/screener/predefined/saved"
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    screener_ids = ["most_actives", "day_gainers", "day_losers", "small_cap_gainers"]
+
+    def _unwrap(val):
+        if isinstance(val, dict):
+            return val.get("raw", val.get("fmt"))
+        return val
+
+    collected = {}
+    last_error = None
+    for scr_id in screener_ids:
+        try:
+            params = {"formatted": "true", "scrIds": scr_id, "count": 100, "lang": "en-US"}
+            r = requests.get(url, params=params, headers=headers, timeout=10)
+            r.raise_for_status()
+            data = r.json()
+            quotes = data["finance"]["result"][0]["quotes"]
+            for q in quotes:
+                symbol = q.get("symbol")
+                if not symbol or symbol in collected:
+                    continue
+                price = _unwrap(q.get("regularMarketPrice"))
+                if price is None or price <= 0.1 or price >= max_price:
+                    continue
+                collected[symbol] = {
+                    "symbol": symbol,
+                    "name": q.get("shortName", symbol),
+                    "price": price,
+                    "change_pct": _unwrap(q.get("regularMarketChangePercent")),
+                    "volume": _unwrap(q.get("regularMarketVolume")) or 0,
+                }
+        except Exception as e:
+            last_error = str(e)
+            continue
+
+    if not collected:
+        return [{"error": f"تعذر جلب أي نتائج حالياً (المصدر غير رسمي وقد يكون تغيّر): {last_error or 'لا توجد نتائج مطابقة'}"}]
+
+    rows = sorted(collected.values(), key=lambda x: x.get("volume", 0), reverse=True)
+    return rows[:limit]
 
 
 # ----------------------------------------------------------------------

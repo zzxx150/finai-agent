@@ -98,10 +98,22 @@ def fetch_stock_snapshot(symbol: str) -> Dict:
         current_price = None
         change_pct = None
         if not hist.empty:
-            current_price = float(hist["Close"].iloc[-1])
-            if len(hist) >= 2:
-                prev_close = float(hist["Close"].iloc[-2])
-                change_pct = ((current_price - prev_close) / prev_close) * 100
+            raw_price = float(hist["Close"].iloc[-1])
+            if not pd.isna(raw_price):
+                current_price = raw_price
+                if len(hist) >= 2:
+                    raw_prev = float(hist["Close"].iloc[-2])
+                    if not pd.isna(raw_prev) and raw_prev != 0:
+                        change_pct = ((current_price - raw_prev) / raw_prev) * 100
+
+        # احتياطي: لو تاريخ الأسعار رجع فاضي أو NaN، جرب الأخذ من بيانات info مباشرة
+        if current_price is None:
+            fallback_price = info.get("currentPrice") or info.get("regularMarketPrice")
+            if fallback_price and not pd.isna(fallback_price):
+                current_price = float(fallback_price)
+                prev_close_info = info.get("previousClose")
+                if prev_close_info and not pd.isna(prev_close_info) and prev_close_info != 0:
+                    change_pct = ((current_price - prev_close_info) / prev_close_info) * 100
 
         snapshot = {
             "symbol": symbol.upper(),

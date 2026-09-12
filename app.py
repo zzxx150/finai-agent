@@ -444,7 +444,8 @@ with tab_search:
         else:
             # ---- ملخص السعر ----
             price_cols = st.columns(5)
-            price_cols[0].metric("السعر الحالي", f"${snapshot['current_price']:.2f}" if snapshot['current_price'] else "—")
+            price_valid = snapshot['current_price'] is not None and not pd.isna(snapshot['current_price'])
+            price_cols[0].metric("السعر الحالي", f"${snapshot['current_price']:.2f}" if price_valid else "غير متوفر حالياً")
             change = snapshot.get("change_pct")
             price_cols[1].metric("التغير اليومي", f"{change:.2f}%" if change is not None else "—",
                                   delta=f"{change:.2f}%" if change is not None else None)

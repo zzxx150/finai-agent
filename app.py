@@ -39,6 +39,7 @@ from utils import (
     save_recommendation,
     get_all_recommendations,
     fetch_top_gainers,
+    fetch_stocks_under_price,
     check_liquidity_activity,
     fetch_extended_hours_data,
     get_market_status,
@@ -689,7 +690,7 @@ with tab_monitor:
 
     watch_scope = st.radio(
         "نطاق المراقبة",
-        ["أسهم محددة", "السوق العام (كل الأسهم)"],
+        ["أسهم محددة", "السوق العام (كل الأسهم)", "💰 أقل من $10 (تحديث حي كل دقيقة)"],
         horizontal=True,
         key="watch_scope",
     )
@@ -783,7 +784,7 @@ with tab_monitor:
                 pick = max(fallback_candidates, key=lambda x: x.get("datetime", 0))
                 newly_found.append(pick)
                 st.session_state["last_fallback_date"] = today_str
-        else:
+        elif watch_scope == "السوق العام (كل الأسهم)":
             newly_found = []
             with st.spinner("جاري فحص أخبار السوق العام..."):
                 items = fetch_market_news(finnhub_key, category=watch_category, limit=50)
@@ -798,6 +799,48 @@ with tab_monitor:
                         related = (item.get("related") or "").strip()
                         item["_symbol"] = related if related else "خبر عام"
                         newly_found.append(item)
+        else:  # "💰 أقل من $10 (تحديث حي كل دقيقة)"
+            newly_found = []
+            with st.spinner("جاري جلب الأسهم الحية اللي سعرها الآن أقل من $10..."):
+                cheap_stocks = fetch_stocks_under_price(max_price=10.0, limit=50)
+
+            if cheap_stocks and "error" in cheap_stocks[0]:
+                st.error(cheap_stocks[0]["error"])
+            else:
+                st.success(f"✅ تم التحقق الآن: {len(cheap_stocks)} سهم حقيقي سعره الحالي أقل من $10")
+                df_cheap = pd.DataFrame(cheap_stocks).rename(columns={
+                    "symbol": "الرمز", "name": "الاسم", "price": "السعر ($)",
+                    "change_pct": "التغير %", "volume": "حجم التداول",
+                })
+                st.dataframe(df_cheap, use_container_width=True, hide_index=True)
+
+                cheap_symbols = [row["symbol"] for row in cheap_stocks if row.get("symbol")]
+                fallback_candidates = []
+                with st.spinner(f"جاري فحص أخبار {len(cheap_symbols)} سهم..."):
+                    for sym in cheap_symbols:
+                        items = fetch_company_news(finnhub_key, sym, days_back=2, limit=10)
+                        for item in items:
+                            if "error" in item:
+                                continue
+                            item["_symbol"] = sym
+                            fp = news_fingerprint(item)
+                            if fp in st.session_state["seen_news_fp"]:
+                                continue
+                            st.session_state["seen_news_fp"].add(fp)
+                            if classify_news_impact(item.get("headline", "")) == "مرشّح (High Impact)":
+                                newly_found.append(item)
+                            else:
+                                fallback_candidates.append(item)
+
+                today_str = dt.date.today().isoformat()
+                if (
+                    enable_auto_ai and openai_key and not newly_found
+                    and fallback_candidates
+                    and st.session_state.get("last_fallback_date_cheap") != today_str
+                ):
+                    pick = max(fallback_candidates, key=lambda x: x.get("datetime", 0))
+                    newly_found.append(pick)
+                    st.session_state["last_fallback_date_cheap"] = today_str
 
         if newly_found is not None:
 

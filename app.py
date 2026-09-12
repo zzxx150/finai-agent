@@ -842,18 +842,39 @@ with tab_monitor:
                     newly_found.append(pick)
                     st.session_state["last_fallback_date_cheap"] = today_str
 
+                # احتياطي ثانٍ: لو ما فيه أي خبر إطلاقاً (حتى عادي) عن هالأسهم
+                # الصغيرة، نحلل أكثر سهم تداولاً بناءً على حركة السعر والمؤشرات
+                # الفنية بس (بدون خبر)، عشان تضمن توصية على الأقل يومياً
+                if (
+                    enable_auto_ai and openai_key and not newly_found and not fallback_candidates
+                    and cheap_stocks and st.session_state.get("last_fallback_date_cheap") != today_str
+                ):
+                    top_symbol = cheap_stocks[0]["symbol"]  # الأكثر تداولاً بالقائمة
+                    newly_found.append({
+                        "headline": f"لا يوجد خبر جديد على {top_symbol} — تحليل فني بناءً على حركة السعر والمؤشرات",
+                        "summary": "لا توجد أخبار حديثة متوفرة لهذا السهم من المصدر. هذا تحليل مبني فقط على السعر، الدعم/المقاومة، RSI و MACD.",
+                        "source": "تحليل فني تلقائي",
+                        "datetime": 0,
+                        "_symbol": top_symbol,
+                        "_technical_only": True,
+                    })
+                    st.session_state["last_fallback_date_cheap"] = today_str
+
         if newly_found is not None:
 
             for item in newly_found:
-                headline_ar = get_arabic_translations([item["headline"]])[0]
+                is_technical_only = item.get("_technical_only", False)
+                headline_ar = item["headline"] if is_technical_only else get_arabic_translations([item["headline"]])[0]
 
-                st.toast(f"🚨 {item['_symbol']}: {headline_ar[:60]}", icon="🚨")
+                icon = "📊" if is_technical_only else "🚨"
+                st.toast(f"{icon} {item['_symbol']}: {headline_ar[:60]}", icon=icon)
 
-                news_msg = f"🚨 خبر قوي جديد على {item['_symbol']}\n{headline_ar}\nالمصدر: {item.get('source', '—')}"
+                msg_prefix = "📊 تحليل فني (لا يوجد خبر)" if is_technical_only else "🚨 خبر قوي جديد"
+                news_msg = f"{msg_prefix} على {item['_symbol']}\n{headline_ar}\nالمصدر: {item.get('source', '—')}"
                 if enable_telegram and telegram_token and telegram_chat_id:
                     send_telegram_alert(telegram_token, telegram_chat_id, news_msg)
                 if enable_ntfy and ntfy_topic:
-                    send_ntfy_alert(ntfy_topic, news_msg, title=f"🚨 خبر قوي: {item['_symbol']}", priority=4)
+                    send_ntfy_alert(ntfy_topic, news_msg, title=f"{msg_prefix}: {item['_symbol']}", priority=4)
 
                 if enable_auto_ai and openai_key:
                     price_ctx = None

@@ -953,15 +953,50 @@ with tab_recommendations:
     st.subheader("📂 سجل التوصيات والصفقات")
     st.caption("كل التوصيات اللي ولّدها الذكاء الاصطناعي (يدوياً أو تلقائياً)، مرتّبة من الأقوى إشارة للأضعف.")
 
+    rc1, rc2 = st.columns([1, 2])
+    with rc1:
+        if st.button("🔄 تحديث حالة الصفقات المفتوحة", use_container_width=True):
+            with st.spinner("جاري مقارنة الصفقات المفتوحة بالأسعار الحالية..."):
+                result = check_and_update_open_recommendations()
+            st.success(
+                f"✅ تم فحص {result['checked']} صفقة — "
+                f"تحقق الهدف: {result['hit_target']} | ضرب وقف الخسارة: {result['hit_stop']} | لسا مفتوحة: {result['still_open']}"
+            )
+
+    win_stats = get_win_rate_stats()
+    with rc2:
+        if win_stats["total_closed"] > 0:
+            wc1, wc2, wc3, wc4 = st.columns(4)
+            wc1.metric("✅ تحقق الهدف", win_stats["hit_target"])
+            wc2.metric("❌ ضرب وقف الخسارة", win_stats["hit_stop"])
+            wc3.metric("🔓 لسا مفتوحة", win_stats["still_open"])
+            wc4.metric("📊 نسبة النجاح الفعلية", f"{win_stats['win_rate']}%")
+        else:
+            st.caption("ما فيه صفقات مغلقة بعد — اضغط 'تحديث حالة الصفقات' للفحص، أو انتظر توصيات جديدة تتحقق مع الوقت.")
+
+    st.caption(
+        "💡 الحالة تُحدَّث فقط لما تضغط الزر أعلاه (ما تتحدث تلقائياً بالخلفية). "
+        "الصفقة تُحسب 'تحقق الهدف' أو 'ضرب وقف الخسارة' بمقارنة السعر الحالي الفعلي بأرقام الدخول/الهدف/الوقف "
+        "المحفوظة وقت التوصية — يحتاج هذا وجود أسعار رقمية محفوظة (تظهر فقط للتوصيات اللي حُللت بعد آخر تحديث للمنصة)."
+    )
+
+    st.divider()
     only_buy = st.checkbox("عرض إشارات الدخول فقط (شراء/بيع)", value=False, key="only_buy_recs")
     recs = get_all_recommendations(limit=200, only_buy_signals=only_buy)
 
     if not recs:
         st.info("لا توجد توصيات محفوظة بعد.")
     else:
+        status_icon_map = {
+            "hit_target": "✅ تحقق الهدف",
+            "hit_stop": "❌ ضرب وقف الخسارة",
+        }
+        for rec in recs:
+            rec["الحالة"] = status_icon_map.get(rec.get("status"), "🔓 مفتوحة")
+
         df_recs = pd.DataFrame(recs)
         display_cols = [
-            "created_at", "symbol", "action", "sentiment", "confidence",
+            "created_at", "symbol", "action", "الحالة", "sentiment", "confidence",
             "estimated_duration", "entry_note", "stop_loss_note", "target_note", "score",
         ]
         display_cols = [c for c in display_cols if c in df_recs.columns]

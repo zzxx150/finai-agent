@@ -512,6 +512,30 @@ with tab_search:
                     lc2.metric("متوسط الحجم (كل 5 دقائق)", format_large_number(liquidity_info["avg_volume_5m"]))
             st.caption("هذا تقدير آلي من حجم التداول الظاهر، وليس بيانات تدفق أوامر حقيقية (Level 2).")
 
+            # ---- المؤشرات الفنية: RSI و MACD ----
+            st.markdown("#### 📈 المؤشرات الفنية (RSI و MACD)")
+            with st.spinner("جاري حساب المؤشرات الفنية..."):
+                tech_info = calculate_technical_indicators(symbol_input)
+            if "error" in tech_info:
+                st.caption(tech_info["error"])
+            else:
+                tc1, tc2 = st.columns(2)
+                tc1.metric("RSI (14)", tech_info["rsi"])
+                tc1.caption(tech_info["rsi_label"])
+                tc2.info(tech_info["macd_signal"])
+
+            # ---- إجماع المحللين ----
+            st.markdown("#### 🏦 إجماع المحللين (لو متوفر)")
+            analyst_info = get_analyst_consensus(symbol_input)
+            if "error" in analyst_info or not analyst_info.get("num_analysts"):
+                st.caption("لا تتوفر بيانات إجماع محللين لهذا السهم (غالباً يتوفر بس للأسهم الكبيرة والمتوسطة).")
+            else:
+                ac1, ac2, ac3, ac4 = st.columns(4)
+                ac1.metric("توصية المحللين", analyst_info.get("recommendation", "—"))
+                ac2.metric("متوسط السعر المستهدف", f"${analyst_info['target_mean']:.2f}" if analyst_info.get("target_mean") else "—")
+                ac3.metric("أعلى سعر مستهدف", f"${analyst_info['target_high']:.2f}" if analyst_info.get("target_high") else "—")
+                ac4.metric("عدد المحللين", analyst_info.get("num_analysts", "—"))
+
             # ---- أسعار ما قبل الافتتاح وما بعد الإغلاق ----
             st.markdown("#### 🌙 التداول قبل وبعد السوق الأمريكي")
             ext_hours = fetch_extended_hours_data(symbol_input)
@@ -553,6 +577,14 @@ with tab_search:
                     score += 1
                 elif sr_info.get("broke_support"):
                     decision_points.append("⚠️ كسر مستوى دعم مهم مؤخراً")
+                    score -= 1
+
+            if "error" not in tech_info:
+                if tech_info["rsi"] <= 30:
+                    decision_points.append("🟢 RSI يشير لتشبّع بيعي (منطقة ارتداد محتملة)")
+                    score += 1
+                elif tech_info["rsi"] >= 70:
+                    decision_points.append("🔴 RSI يشير لتشبّع شرائي (منطقة تصحيح محتملة)")
                     score -= 1
 
             if squeeze_info.get("low_float") and squeeze_info.get("high_short_interest"):

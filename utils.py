@@ -77,6 +77,10 @@ def fetch_company_news(api_key: str, symbol: str, days_back: int = 5, limit: int
             data.sort(key=lambda x: x.get("datetime", 0), reverse=True)
             return data[:limit]
         return []
+    except requests.exceptions.HTTPError as e:
+        if r.status_code == 429:
+            return [{"error": "تجاوزت حد الطلبات المجاني من Finnhub (60 طلب/دقيقة). قلّل عدد الأسهم المراقَبة أو انتظر دقيقة وجرب مرة ثانية."}]
+        return [{"error": str(e)}]
     except Exception as e:
         return [{"error": str(e)}]
 
@@ -1035,20 +1039,46 @@ def check_and_update_open_recommendations() -> Dict:
 
 
 def get_win_rate_stats() -> Dict:
-    """يحسب نسبة نجاح التوصيات المغلقة (اللي تحقق فيها الهدف أو ضرب وقف الخسارة فعلياً)."""
+    """
+    يحسب نسبة نجاح التوصيات المغلقة (اللي تحقق فيها الهدف أو ضرب وقف الخسارة فعلياً)،
+    ومتوسط نسبة المخاطرة/العائد المخطط لها (Risk:Reward) لإعطاء صورة أدق
+    من مجرد نسبة النجاح — صفقة رابحة كبيرة تعادل عدة صفقات خاسرة صغيرة.
+    """
     init_db()
     with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
         hits = conn.execute("SELECT COUNT(*) FROM recommendations WHERE status = 'hit_target'").fetchone()[0]
         stops = conn.execute("SELECT COUNT(*) FROM recommendations WHERE status = 'hit_stop'").fetchone()[0]
         open_count = conn.execute(
             "SELECT COUNT(*) FROM recommendations WHERE status IS NULL OR status = '' OR status = 'open'"
         ).fetchone()[0]
 
+        closed_rows = conn.execute("""
+            SELECT entry_price, stop_loss_price, target_price FROM recommendations
+            WHERE status IN ('hit_target', 'hit_stop')
+            AND entry_price IS NOT NULL AND stop_loss_price IS NOT NULL AND target_price IS NOT NULL
+        """).fetchall()
+
     total_closed = hits + stops
     win_rate = round((hits / total_closed) * 100, 1) if total_closed > 0 else None
+
+    rr_ratios = []
+    for row in closed_rows:
+        risk = abs(row["entry_price"] - row["stop_loss_price"])
+        reward = abs(row["target_price"] - row["entry_price"])
+        if risk > 0:
+            rr_ratios.append(reward / risk)
+    avg_rr = round(sum(rr_ratios) / len(rr_ratios), 2) if rr_ratios else None
+
+    expectancy = None
+    if avg_rr is not None and win_rate is not None:
+        win_prob = win_rate / 100
+        expectancy = round((win_prob * avg_rr) - (1 - win_prob), 2)
+
     return {
         "hit_target": hits, "hit_stop": stops, "still_open": open_count,
         "total_closed": total_closed, "win_rate": win_rate,
+        "avg_risk_reward": avg_rr, "expectancy_r": expectancy,
     }
 
 
@@ -1227,3 +1257,196 @@ def list_app_users() -> List[Dict]:
             "SELECT username, name, created_at FROM app_users ORDER BY created_at DESC"
         ).fetchall()
         return [dict(r) for r in rows]
+
+
+# ----------------------------------------------------------------------
+# 21) تنبيهات سعرية بدون الحاجة لخبر (Price Alerts)
+# ----------------------------------------------------------------------
+
+def init_price_alerts_db() -> None:
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS price_alerts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT,
+                target_price REAL,
+                direction TEXT,
+                created_by TEXT,
+                created_at TEXT,
+                triggered INTEGER DEFAULT 0,
+                triggered_at TEXT
+            )
+        """)
+        conn.commit()
+
+
+def add_price_alert(symbol: str, target_price: float, direction: str, created_by: str = "system") -> None:
+    """direction: 'above' (نبّهني إذا وصل فوق) أو 'below' (نبّهني إذا نزل تحت)."""
+    init_price_alerts_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "INSERT INTO price_alerts (symbol, target_price, direction, created_by, created_at) VALUES (?,?,?,?,?)",
+            (symbol.upper(), target_price, direction, created_by, dt.datetime.now().isoformat(timespec="seconds")),
+        )
+        conn.commit()
+
+
+def get_active_price_alerts() -> List[Dict]:
+    init_price_alerts_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT * FROM price_alerts WHERE triggered = 0 ORDER BY created_at DESC"
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def delete_price_alert(alert_id: int) -> None:
+    init_price_alerts_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("DELETE FROM price_alerts WHERE id = ?", (alert_id,))
+        conn.commit()
+
+
+def check_price_alerts() -> List[Dict]:
+    """
+    يفحص كل التنبيهات السعرية النشطة، يقارنها بالسعر الحالي الفعلي،
+    ويرجع قائمة بالتنبيهات اللي تحققت الآن (ويعلّمها كمُفعّلة بقاعدة البيانات
+    عشان ما تتكرر التنبيهات لنفس الحدث).
+    """
+    init_price_alerts_db()
+    alerts = get_active_price_alerts()
+    triggered = []
+    with sqlite3.connect(DB_PATH) as conn:
+        for alert in alerts:
+            snap = fetch_stock_snapshot(alert["symbol"])
+            current_price = snap.get("current_price")
+            if current_price is None:
+                continue
+            hit = (
+                (alert["direction"] == "above" and current_price >= alert["target_price"])
+                or (alert["direction"] == "below" and current_price <= alert["target_price"])
+            )
+            if hit:
+                conn.execute(
+                    "UPDATE price_alerts SET triggered = 1, triggered_at = ? WHERE id = ?",
+                    (dt.datetime.now().isoformat(timespec="seconds"), alert["id"]),
+                )
+                alert["current_price"] = current_price
+                triggered.append(alert)
+        conn.commit()
+    return triggered
+
+
+# ----------------------------------------------------------------------
+# 22) تقويم الأرباح (Earnings Calendar)
+# ----------------------------------------------------------------------
+
+def fetch_earnings_calendar(symbols: List[str]) -> List[Dict]:
+    """
+    يجلب تاريخ إعلان الأرباح القادم لكل رمز بقائمة معطاة، عبر yfinance.
+    يرجع النتائج مرتبة من الأقرب موعداً للأبعد. الرموز اللي ما فيها معلومة
+    متوفرة تُستبعد من النتيجة.
+    """
+    results = []
+    for symbol in symbols:
+        try:
+            t = yf.Ticker(symbol)
+            cal = t.calendar
+            earnings_date = None
+            if isinstance(cal, dict):
+                ed = cal.get("Earnings Date")
+                if isinstance(ed, list) and ed:
+                    earnings_date = ed[0]
+                elif ed:
+                    earnings_date = ed
+            elif hasattr(cal, "empty") and not cal.empty:
+                if "Earnings Date" in cal.index:
+                    val = cal.loc["Earnings Date"]
+                    earnings_date = val.iloc[0] if hasattr(val, "iloc") else val
+
+            if earnings_date is None:
+                continue
+
+            if hasattr(earnings_date, "strftime"):
+                date_str = earnings_date.strftime("%Y-%m-%d")
+                date_obj = earnings_date
+            else:
+                date_str = str(earnings_date)
+                date_obj = None
+
+            results.append({"symbol": symbol, "earnings_date": date_str, "_sort_key": date_obj or dt.date.max})
+        except Exception:
+            continue
+
+    results.sort(key=lambda x: str(x["_sort_key"]))
+    for r in results:
+        r.pop("_sort_key", None)
+    return results
+
+
+# ----------------------------------------------------------------------
+# 23) اختبار تاريخي مبسّط (Backtest) بناءً على السعر فقط (بدون أخبار)
+# ----------------------------------------------------------------------
+
+def run_technical_backtest(symbol: str, months: int = 3) -> Dict:
+    """
+    اختبار تاريخي مبسّط: يفحص آخر عدة أشهر من بيانات السهم، ويحاكي دخول
+    صفقة كل مرة يخترق فيها السعر مقاومة 20 يوم (بافتراض وقف خسارة 3% وهدف
+    6% من سعر الدخول)، ويحسب كم صفقة كانت ستنجح تاريخياً بهذا المنطق.
+
+    ⚠️ هذا اختبار مبني على حركة السعر فقط (Price Action)، ولا يشمل تأثير
+    الأخبار الفعلية وقتها — فهو تقريبي وأداة استرشادية لفهم سلوك السهم
+    التاريخي العام، وليس ضماناً لأداء مستقبلي أو محاكاة دقيقة لمنطق
+    الذكاء الاصطناعي المستخدم بالتحليل اللحظي.
+    """
+    try:
+        t = yf.Ticker(symbol)
+        hist = t.history(period=f"{months}mo")
+        if hist.empty or len(hist) < 25:
+            return {"error": "بيانات تاريخية غير كافية لإجراء الاختبار."}
+
+        closes = hist["Close"].values
+        highs = hist["High"].values
+        lows = hist["Low"].values
+
+        trades = []
+        i = 20
+        while i < len(closes) - 1:
+            resistance_20 = highs[max(0, i - 20):i].max()
+            if closes[i] > resistance_20:
+                entry = closes[i]
+                stop = entry * 0.97
+                target = entry * 1.06
+                outcome = None
+                for j in range(i + 1, min(i + 15, len(closes))):
+                    if lows[j] <= stop:
+                        outcome = "loss"
+                        break
+                    if highs[j] >= target:
+                        outcome = "win"
+                        break
+                if outcome:
+                    trades.append(outcome)
+                    i = j
+                else:
+                    i += 1
+            else:
+                i += 1
+
+        if not trades:
+            return {"error": "لم يُسجَّل أي اختراق مقاومة واضح خلال هذي الفترة لإجراء اختبار عليه."}
+
+        wins = trades.count("win")
+        losses = trades.count("loss")
+        win_rate = round((wins / len(trades)) * 100, 1)
+
+        return {
+            "total_trades": len(trades),
+            "wins": wins,
+            "losses": losses,
+            "win_rate": win_rate,
+            "period_months": months,
+        }
+    except Exception as e:
+        return {"error": str(e)}

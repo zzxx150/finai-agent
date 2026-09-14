@@ -54,6 +54,12 @@ from utils import (
     get_win_rate_stats,
     create_app_user,
     get_app_user,
+    add_price_alert,
+    get_active_price_alerts,
+    delete_price_alert,
+    check_price_alerts,
+    fetch_earnings_calendar,
+    run_technical_backtest,
 )
 
 load_dotenv()
@@ -137,6 +143,114 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
+# ----------------------------------------------------------------------
+# تنسيق مخصص: خط عربي أنيق، ألوان متناسقة، بطاقات مرتبة، مسافات محسّنة
+# ----------------------------------------------------------------------
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@400;500;700;900&display=swap');
+
+html, body, [class*="css"], .stMarkdown, .stText, p, span, div, label {
+    font-family: 'Tajawal', 'Segoe UI', sans-serif !important;
+}
+
+/* خلفية عامة أهدأ للعين */
+[data-testid="stAppViewContainer"] {
+    background: linear-gradient(180deg, #0B0E14 0%, #10141F 100%);
+}
+[data-testid="stSidebar"] {
+    background: #0D1017;
+    border-left: 1px solid rgba(255,255,255,0.06);
+}
+
+/* عنوان الصفحة الرئيسي */
+h1 {
+    font-weight: 900 !important;
+    background: linear-gradient(90deg, #22D3A8, #4FD1FF);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    padding-bottom: 4px;
+}
+h2, h3, h4 { font-weight: 700 !important; color: #E8EDF5 !important; }
+
+/* بطاقات المؤشرات (st.metric) بشكل أنيق */
+[data-testid="stMetric"] {
+    background: rgba(255,255,255,0.035);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 14px;
+    padding: 14px 16px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.15);
+    transition: all 0.2s ease;
+}
+[data-testid="stMetric"]:hover {
+    border-color: rgba(34,211,168,0.4);
+    transform: translateY(-1px);
+}
+[data-testid="stMetricLabel"] { color: #9AA5B5 !important; font-size: 0.85rem !important; }
+[data-testid="stMetricValue"] { color: #F2F5F9 !important; font-weight: 700 !important; }
+
+/* التبويبات على شكل كبسولات أنيقة */
+[data-testid="stTabs"] button[role="tab"] {
+    border-radius: 999px !important;
+    padding: 6px 18px !important;
+    margin-left: 4px;
+    background: rgba(255,255,255,0.03);
+    border: 1px solid rgba(255,255,255,0.07) !important;
+    transition: all 0.2s ease;
+}
+[data-testid="stTabs"] button[role="tab"][aria-selected="true"] {
+    background: linear-gradient(90deg, #22D3A8, #4FD1FF) !important;
+    color: #06110D !important;
+    font-weight: 700 !important;
+    border: none !important;
+}
+
+/* الأزرار */
+.stButton button, .stFormSubmitButton button {
+    border-radius: 10px !important;
+    font-weight: 600 !important;
+    transition: all 0.2s ease;
+}
+.stButton button[kind="primary"], .stFormSubmitButton button[kind="primary"] {
+    background: linear-gradient(90deg, #22D3A8, #1BB894) !important;
+    border: none !important;
+    color: #06110D !important;
+}
+.stButton button:hover, .stFormSubmitButton button:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 4px 14px rgba(34,211,168,0.25);
+}
+
+/* صناديق التنبيهات (info/success/warning/error) أوضح وأنعم */
+[data-testid="stAlert"] {
+    border-radius: 12px !important;
+    border: 1px solid rgba(255,255,255,0.08) !important;
+}
+
+/* الجداول والـ dataframe */
+[data-testid="stDataFrame"] {
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid rgba(255,255,255,0.08);
+}
+
+/* الخط الفاصل st.divider أخف وأنعم */
+hr { border-color: rgba(255,255,255,0.08) !important; margin: 1.4rem 0 !important; }
+
+/* الـ expander بشكل بطاقة */
+[data-testid="stExpander"] {
+    background: rgba(255,255,255,0.02);
+    border-radius: 12px !important;
+    border: 1px solid rgba(255,255,255,0.07) !important;
+}
+
+/* تحسين خانات الإدخال */
+input, textarea, select, .stSelectbox div[data-baseweb="select"] {
+    border-radius: 10px !important;
+}
+</style>
+""", unsafe_allow_html=True)
 
 # ----------------------------------------------------------------------
 # بوابة تسجيل الدخول — تظهر قبل أي محتوى آخر في التطبيق
@@ -329,6 +443,8 @@ with st.expander("🕐 أوقات التداول الكاملة بالسوق ا�
     tab_monitor,
     tab_gainers,
     tab_recommendations,
+    tab_alerts,
+    tab_earnings,
     tab_risk,
     tab_watch,
 ) = st.tabs(
@@ -338,6 +454,8 @@ with st.expander("🕐 أوقات التداول الكاملة بالسوق ا�
         "🚨 مراقبة لحظية",
         "🏆 الأكثر ربحاً",
         "📂 سجل التوصيات",
+        "🔔 تنبيهات سعرية",
+        "📅 تقويم الأرباح",
         "🎯 حاسبة المخاطر",
         "📋 متابعة سريعة",
     ]
@@ -607,6 +725,25 @@ with tab_search:
                 else:
                     st.info("الإشارات متضاربة أو محايدة — يُفضّل انتظار وضوح أكبر قبل القرار.")
             st.caption("هذي خلاصة آلية بسيطة من عدة مؤشرات، وليست توصية استثمارية نهائية.")
+
+            # ---- اختبار تاريخي مبسّط (Backtest) ----
+            st.markdown("#### 🕰️ اختبار تاريخي مبسّط (Backtest)")
+            st.caption(
+                "يحاكي دخول صفقة كل مرة كان السهم يخترق مقاومة 20 يوم تاريخياً، بوقف خسارة 3% وهدف 6%، "
+                "ويحسب كم مرة كان هذا المنطق سينجح. ⚠️ يعتمد على السعر فقط بدون أخبار فعلية وقتها — تقريبي واسترشادي بس."
+            )
+            bt_months = st.select_slider("فترة الاختبار (بالأشهر)", options=[1, 3, 6, 12], value=3, key="bt_months")
+            if st.button("🧪 شغّل الاختبار التاريخي", key="run_backtest"):
+                with st.spinner("جاري تشغيل الاختبار على البيانات التاريخية..."):
+                    bt_result = run_technical_backtest(symbol_input, months=bt_months)
+                if "error" in bt_result:
+                    st.info(bt_result["error"])
+                else:
+                    bt1, bt2, bt3, bt4 = st.columns(4)
+                    bt1.metric("عدد الصفقات المحاكاة", bt_result["total_trades"])
+                    bt2.metric("✅ ناجحة", bt_result["wins"])
+                    bt3.metric("❌ خاسرة", bt_result["losses"])
+                    bt4.metric("نسبة النجاح التاريخية", f"{bt_result['win_rate']}%")
 
             # ---- الشارت التفاعلي (TradingView Widget) ----
             st.markdown("#### 📊 الشارت التفاعلي (TradingView)")
@@ -1023,6 +1160,19 @@ with tab_recommendations:
             wc2.metric("❌ ضرب وقف الخسارة", win_stats["hit_stop"])
             wc3.metric("🔓 لسا مفتوحة", win_stats["still_open"])
             wc4.metric("📊 نسبة النجاح الفعلية", f"{win_stats['win_rate']}%")
+
+            if win_stats.get("avg_risk_reward") is not None:
+                wc5, wc6 = st.columns(2)
+                wc5.metric("⚖️ متوسط المخاطرة/العائد المخطط", f"1 : {win_stats['avg_risk_reward']}")
+                expectancy = win_stats.get("expectancy_r")
+                if expectancy is not None:
+                    exp_label = "✅ إيجابي (مربح إحصائياً)" if expectancy > 0 else "⚠️ سلبي (خاسر إحصائياً)"
+                    wc6.metric("🧮 التوقع الرياضي (لكل وحدة مخاطرة)", f"{expectancy}R", help=exp_label)
+                st.caption(
+                    "التوقع الرياضي (Expectancy) يجمع بين نسبة النجاح ونسبة المخاطرة/العائد بمعادلة واحدة — "
+                    "رقم موجب يعني الاستراتيجية مربحة إحصائياً على المدى الطويل حتى لو نسبة النجاح أقل من 50%، "
+                    "ورقم سالب يعني العكس حتى لو نسبة النجاح عالية."
+                )
         else:
             st.caption("ما فيه صفقات مغلقة بعد — اضغط 'تحديث حالة الصفقات' للفحص، أو انتظر توصيات جديدة تتحقق مع الوقت.")
 
@@ -1080,10 +1230,102 @@ with tab_recommendations:
         df_display = df_recs[display_cols].rename(columns=rename_map)
         st.dataframe(df_display, use_container_width=True, hide_index=True)
 
+        csv_data = df_display.to_csv(index=False).encode("utf-8-sig")
+        st.download_button(
+            "⬇️ تحميل الجدول كملف Excel/CSV",
+            data=csv_data,
+            file_name=f"توصيات_finai_{dt.date.today().isoformat()}.csv",
+            mime="text/csv",
+        )
+
 # ========================================================================
 # التبويب 6: حاسبة إدارة المخاطر وحجم الصفقة
 # ========================================================================
-with tab_risk:
+# ========================================================================
+# التبويب الجديد: تنبيهات سعرية بدون الحاجة لخبر
+# ========================================================================
+with tab_alerts:
+    st.subheader("🔔 تنبيهات سعرية")
+    st.caption("حط سعر مستهدف لأي سهم، وتوصلك رسالة (تلغرام/ntfy) فور ما يوصل — بدون انتظار خبر أو تحليل.")
+
+    with st.form("add_alert_form"):
+        ac1, ac2, ac3 = st.columns([2, 2, 2])
+        with ac1:
+            alert_symbol = st.text_input("رمز السهم", placeholder="مثال: NVDA")
+        with ac2:
+            alert_price = st.number_input("السعر المستهدف ($)", min_value=0.0, step=0.5)
+        with ac3:
+            alert_direction = st.selectbox("الشرط", ["above", "below"], format_func=lambda x: "وصل فوق ⬆️" if x == "above" else "نزل تحت ⬇️")
+        add_alert_submitted = st.form_submit_button("➕ إضافة تنبيه", type="primary")
+
+    if add_alert_submitted:
+        if not alert_symbol or alert_price <= 0:
+            st.error("لازم تكتب رمز سهم وسعر أكبر من صفر.")
+        else:
+            add_price_alert(alert_symbol.strip().upper(), alert_price, alert_direction, created_by=st.session_state.get("username", "system"))
+            st.success(f"✅ تم إضافة تنبيه: {alert_symbol.upper()} {'فوق' if alert_direction == 'above' else 'تحت'} ${alert_price}")
+            st.rerun()
+
+    st.divider()
+    check_alerts_col1, check_alerts_col2 = st.columns([1, 3])
+    with check_alerts_col1:
+        check_alerts_now = st.button("🔄 فحص التنبيهات الآن", use_container_width=True)
+
+    if check_alerts_now:
+        with st.spinner("جاري فحص الأسعار الحالية..."):
+            triggered = check_price_alerts()
+        if triggered:
+            for alert in triggered:
+                direction_ar = "فوق" if alert["direction"] == "above" else "تحت"
+                msg = f"🔔 تنبيه سعري تحقق: {alert['symbol']} وصل ${alert['current_price']:.2f} ({direction_ar} هدفك ${alert['target_price']})"
+                st.success(msg)
+                if enable_telegram and telegram_token and telegram_chat_id:
+                    send_telegram_alert(telegram_token, telegram_chat_id, msg)
+                if enable_ntfy and ntfy_topic:
+                    send_ntfy_alert(ntfy_topic, msg, title=f"🔔 تنبيه سعري: {alert['symbol']}", priority=4)
+        else:
+            st.info("لا يوجد تنبيه تحقق حتى الآن.")
+
+    st.divider()
+    st.markdown("##### التنبيهات النشطة")
+    active_alerts = get_active_price_alerts()
+    if not active_alerts:
+        st.caption("ما فيه تنبيهات نشطة حالياً.")
+    else:
+        for alert in active_alerts:
+            acol1, acol2 = st.columns([5, 1])
+            direction_ar = "وصل فوق ⬆️" if alert["direction"] == "above" else "نزل تحت ⬇️"
+            acol1.write(f"**{alert['symbol']}** — {direction_ar} **${alert['target_price']}**")
+            if acol2.button("🗑️ حذف", key=f"del_alert_{alert['id']}"):
+                delete_price_alert(alert["id"])
+                st.rerun()
+
+    st.caption("💡 الفحص يدوي بالزر أعلاه حالياً (ما يشتغل تلقائياً بالخلفية). اضغطه كل ما تبي تتأكد من أسعار تنبيهاتك.")
+
+
+# ========================================================================
+# التبويب الجديد: تقويم الأرباح
+# ========================================================================
+with tab_earnings:
+    st.subheader("📅 تقويم الأرباح")
+    st.caption("اعرف بالضبط متى الشركات المهتم فيها بتعلن أرباحها — من أقوى محركات حركة السعر.")
+
+    earnings_symbols_text = st.text_input(
+        "رموز الأسهم (مفصولة بفاصلة)", value="AAPL,NVDA,TSLA,MSFT,AMZN,GOOGL,META,AMD", key="earnings_symbols",
+    )
+    if st.button("📅 اعرض تواريخ الأرباح", type="primary"):
+        symbols_list = [s.strip().upper() for s in earnings_symbols_text.split(",") if s.strip()][:30]
+        with st.spinner("جاري جلب تواريخ الأرباح..."):
+            earnings_data = fetch_earnings_calendar(symbols_list)
+        if not earnings_data:
+            st.info("ما فيه تواريخ أرباح متوفرة لهذي الرموز حالياً.")
+        else:
+            df_earnings = pd.DataFrame(earnings_data).rename(columns={"symbol": "الرمز", "earnings_date": "تاريخ الأرباح المتوقع"})
+            st.dataframe(df_earnings, use_container_width=True, hide_index=True)
+            st.caption("⚠️ التواريخ تقديرية من ياهو فايننس، وممكن تتغيّر قبل الإعلان الرسمي من الشركة.")
+
+
+
     st.subheader("🎯 حاسبة إدارة المخاطر وتحديد حجم الصفقة")
     st.caption("أدخل بيانات محفظتك ونقاط الصفقة لمعرفة الحجم المناسب والمخاطرة الفعلية بالدولار.")
 
@@ -1151,6 +1393,13 @@ with tab_watch:
                 ),
                 use_container_width=True,
                 hide_index=True,
+            )
+            csv_watch = df_watch.to_csv(index=False).encode("utf-8-sig")
+            st.download_button(
+                "⬇️ تحميل كملف Excel/CSV",
+                data=csv_watch,
+                file_name=f"متابعة_سريعة_{dt.date.today().isoformat()}.csv",
+                mime="text/csv",
             )
         else:
             st.info("لم يتم العثور على بيانات لأي من الرموز المدخلة.")

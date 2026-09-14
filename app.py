@@ -981,7 +981,15 @@ with tab_recommendations:
     )
 
     st.divider()
-    only_buy = st.checkbox("عرض إشارات الدخول فقط (شراء/بيع)", value=False, key="only_buy_recs")
+    fc1, fc2 = st.columns([1, 1])
+    with fc1:
+        only_buy = st.checkbox("عرض إشارات الدخول فقط (شراء/بيع)", value=False, key="only_buy_recs")
+    with fc2:
+        status_filter = st.selectbox(
+            "تصفية حسب الحالة",
+            ["الكل", "❌ ضرب وقف الخسارة فقط (الفاشلة)", "✅ تحقق الهدف فقط (الناجحة)", "🔓 مفتوحة فقط"],
+            key="status_filter_recs",
+        )
     recs = get_all_recommendations(limit=200, only_buy_signals=only_buy)
 
     if not recs:
@@ -993,6 +1001,17 @@ with tab_recommendations:
         }
         for rec in recs:
             rec["الحالة"] = status_icon_map.get(rec.get("status"), "🔓 مفتوحة")
+
+        if status_filter == "❌ ضرب وقف الخسارة فقط (الفاشلة)":
+            recs = [r for r in recs if r.get("status") == "hit_stop"]
+        elif status_filter == "✅ تحقق الهدف فقط (الناجحة)":
+            recs = [r for r in recs if r.get("status") == "hit_target"]
+        elif status_filter == "🔓 مفتوحة فقط":
+            recs = [r for r in recs if r.get("status") not in ("hit_target", "hit_stop")]
+
+        if not recs:
+            st.info("لا توجد توصيات مطابقة لهذا الفلتر.")
+            st.stop()
 
         df_recs = pd.DataFrame(recs)
         display_cols = [

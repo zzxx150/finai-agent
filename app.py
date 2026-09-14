@@ -113,6 +113,24 @@ def suppress_short_if_disabled(analysis: dict, shorts_enabled: bool) -> dict:
     return analysis
 
 
+def enforce_neutral_wait(analysis: dict) -> dict:
+    """
+    منع تناقض منطقي: لو معنويات الخبر 'محايد'، ما يُسمح للإجراء يكون
+    'دخول شراء' أو 'دخول بيع' — لازم يتحول لـ'انتظار' تلقائياً. هذا يمنع
+    حالات كان الذكاء الاصطناعي يقترح فيها صفقة فعلية رغم إشارة ضعيفة/غير
+    واضحة (خصوصاً بالتحليل الفني بدون خبر).
+    """
+    plan = analysis.get("trade_plan", {})
+    action = plan.get("action", "")
+    if analysis.get("sentiment") == "محايد" and ("دخول" in action):
+        plan["action"] = "انتظار (معنويات محايدة — لا توجد إشارة واضحة كفاية للدخول)"
+        plan["entry_price"] = None
+        plan["stop_loss_price"] = None
+        plan["target_price"] = None
+        analysis["trade_plan"] = plan
+    return analysis
+
+
 st.set_page_config(
     page_title="Financial AI Agent",
     page_icon="📈",
@@ -633,6 +651,7 @@ with tab_search:
                                         st.error(analysis["error"])
                                     else:
                                         analysis = suppress_short_if_disabled(analysis, enable_shorts)
+                                        analysis = enforce_neutral_wait(analysis)
                                         save_recommendation(
                                             symbol_input, headline, analysis,
                                             created_by=st.session_state.get("username", "system"),
@@ -886,6 +905,7 @@ with tab_monitor:
                     )
                     if "error" not in analysis:
                         analysis = suppress_short_if_disabled(analysis, enable_shorts)
+                        analysis = enforce_neutral_wait(analysis)
                         save_recommendation(
                             item["_symbol"], item["headline"], analysis,
                             created_by=st.session_state.get("username", "system"),

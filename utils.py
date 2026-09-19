@@ -542,6 +542,23 @@ def compute_score(sentiment: Optional[str], confidence) -> float:
     return round(weight * conf, 2)
 
 
+def has_recent_open_recommendation(symbol: str, hours: int = 24) -> bool:
+    """
+    يتحقق هل فيه توصية 'مفتوحة' (غير محسومة بعد) لنفس السهم خلال آخر عدد
+    ساعات محدد. يُستخدم لمنع تسجيل نفس الإشارة كصفقة 'جديدة' لو أعيد
+    تحليلها بالخطأ (مثلاً بعد إعادة تشغيل الجلسة أو التطبيق).
+    """
+    init_db()
+    cutoff = (dt.datetime.now() - dt.timedelta(hours=hours)).isoformat(timespec="seconds")
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute("""
+            SELECT COUNT(*) FROM recommendations
+            WHERE symbol = ? AND created_at >= ?
+            AND (status IS NULL OR status = '' OR status = 'open')
+        """, (symbol, cutoff)).fetchone()
+    return row[0] > 0
+
+
 def save_recommendation(symbol: str, headline: str, analysis: Dict, created_by: str = "system") -> None:
     """يحفظ نتيجة تحليل الذكاء الاصطناعي كتوصية جديدة في قاعدة البيانات."""
     init_db()

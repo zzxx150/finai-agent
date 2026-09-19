@@ -62,6 +62,10 @@ from utils import (
     run_technical_backtest,
     has_recent_open_recommendation,
     calculate_confluence_score,
+    fetch_market_trend,
+    calculate_atr,
+    check_sector_concentration,
+    get_confluence_accuracy_stats,
 )
 
 load_dotenv()
@@ -818,7 +822,12 @@ with tab_search:
                             else:
                                 if st.button("🤖 حلّل هذا الخبر بالذكاء الاصطناعي", key=f"analyze_{idx}"):
                                     with st.spinner("جاري التحليل..."):
-                                        price_ctx = sr_info if "error" not in sr_info else None
+                                        price_ctx = dict(sr_info) if "error" not in sr_info else None
+                                        if price_ctx is not None:
+                                            atr_info = calculate_atr(symbol_input)
+                                            if "error" not in atr_info:
+                                                price_ctx["atr_suggested_stop_distance"] = atr_info["suggested_stop_distance"]
+                                                price_ctx["atr_suggested_target_distance"] = atr_info["suggested_target_distance"]
                                         analysis = analyze_news_with_ai(
                                             openai_key,
                                             headline=headline,
@@ -832,12 +841,23 @@ with tab_search:
                                     else:
                                         analysis = suppress_short_if_disabled(analysis, enable_shorts)
                                         analysis = enforce_neutral_wait(analysis)
+                                        plan = analysis.get("trade_plan", {})
+
+                                        confluence = None
+                                        if "دخول" in plan.get("action", ""):
+                                            with st.spinner("جاري حساب درجة تطابق الإشارات..."):
+                                                confluence = calculate_confluence_score(
+                                                    symbol_input, plan.get("action", ""),
+                                                    analysis.get("sentiment", ""), analysis.get("is_likely_official", False),
+                                                )
+
                                         if has_recent_open_recommendation(symbol_input, hours=24):
                                             st.info("ℹ️ فيه توصية مفتوحة لنفس السهم خلال آخر 24 ساعة — ما راح تُسجَّل هذي كتوصية جديدة (بس التحليل يظهر لك تحت).")
                                         else:
                                             save_recommendation(
                                                 symbol_input, headline, analysis,
                                                 created_by=st.session_state.get("username", "system"),
+                                                confluence_score=confluence["score"] if confluence else None,
                                             )
                                             st.caption("✅ تم حفظ هذه التوصية في سجل التوصيات (تبويب 📂).")
                                         sentiment_color = {
@@ -855,15 +875,8 @@ with tab_search:
                                             f"**مصدر موثوق؟** {'✅ نعم' if analysis.get('is_likely_official') else '⚠️ غير مؤكد'}"
                                         )
 
-                                        plan = analysis.get("trade_plan", {})
-
                                         # ---- درجة تطابق الإشارات (Confluence Score) ----
-                                        if "دخول" in plan.get("action", ""):
-                                            with st.spinner("جاري حساب درجة تطابق الإشارات..."):
-                                                confluence = calculate_confluence_score(
-                                                    symbol_input, plan.get("action", ""),
-                                                    analysis.get("sentiment", ""), analysis.get("is_likely_official", False),
-                                                )
+                                        if confluence:
                                             st.markdown("##### 🧭 درجة تطابق الإشارات (Confluence Score)")
                                             conf_color = "green" if confluence["score"] >= 75 else ("orange" if confluence["score"] >= 55 else "red")
                                             st.markdown(f"### :{conf_color}[{confluence['score']}%] — {confluence['verdict']}")
@@ -877,6 +890,9 @@ with tab_search:
                                                     st.write(c)
                                             if confluence["unavailable"]:
                                                 st.caption("غير متوفر: " + "، ".join(confluence["unavailable"]))
+                                            if confluence.get("risk_warnings"):
+                                                for w in confluence["risk_warnings"]:
+                                                    st.warning(w)
                                             st.caption("⚠️ هذي درجة استرشادية إحصائية تجمع عدة مؤشرات، وليست ضماناً لنجاح الصفقة.")
 
                                         st.markdown("##### 🎯 خطة التداول المقترحة (استرشادية)")
@@ -912,6 +928,12 @@ with tab_monitor:
             value=False, key="enable_auto_ai",
             help="تنبيه: هذا يستهلك رصيد OpenAI تلقائياً كل مرة يُرصد فيها خبر قوي جديد.",
         )
+
+    min_confluence_for_alert = st.slider(
+        "🎚️ الحد الأدنى لدرجة التطابق لإرسال تنبيه (تلغرام/ntfy)",
+        min_value=0, max_value=95, value=0, step=5,
+        help="0 = يرسل كل التوصيات. لو رفعته لـ 70 مثلاً، ما توصلك تنبيهات إلا للتوصيات اللي درجة تطابقها 70% فأعلى — تقلل الضجيج وتركّز على الأقوى.",
+    )
 
     watch_scope = st.radio(
         "نطاق المراقبة",
@@ -1105,6 +1127,11 @@ with tab_monitor:
                     price_ctx = None
                     if item["_symbol"] not in ("خبر عام",):
                         price_ctx = calculate_support_resistance(item["_symbol"])
+                        if "error" not in price_ctx:
+                            atr_info = calculate_atr(item["_symbol"])
+                            if "error" not in atr_info:
+                                price_ctx["atr_suggested_stop_distance"] = atr_info["suggested_stop_distance"]
+                                price_ctx["atr_suggested_target_distance"] = atr_info["suggested_target_distance"]
                     analysis = analyze_news_with_ai(
                         openai_key, item["headline"], item.get("summary", ""), item["_symbol"],
                         model=ai_model, price_context=price_ctx,
@@ -1112,21 +1139,24 @@ with tab_monitor:
                     if "error" not in analysis:
                         analysis = suppress_short_if_disabled(analysis, enable_shorts)
                         analysis = enforce_neutral_wait(analysis)
+                        plan = analysis.get("trade_plan", {})
+
+                        confluence = None
+                        if "دخول" in plan.get("action", ""):
+                            confluence = calculate_confluence_score(
+                                item["_symbol"], plan.get("action", ""),
+                                analysis.get("sentiment", ""), analysis.get("is_likely_official", False),
+                            )
+
                         if has_recent_open_recommendation(item["_symbol"], hours=24):
                             st.caption(f"ℹ️ تم تجاهل حفظ توصية مكررة لـ {item['_symbol']} (فيه توصية مفتوحة خلال آخر 24 ساعة).")
                         else:
                             save_recommendation(
                                 item["_symbol"], item["headline"], analysis,
                                 created_by=st.session_state.get("username", "system"),
+                                confluence_score=confluence["score"] if confluence else None,
                             )
-                            plan = analysis.get("trade_plan", {})
-                            confluence_line = ""
-                            if "دخول" in plan.get("action", ""):
-                                confluence = calculate_confluence_score(
-                                    item["_symbol"], plan.get("action", ""),
-                                    analysis.get("sentiment", ""), analysis.get("is_likely_official", False),
-                                )
-                                confluence_line = f"🧭 درجة التطابق: {confluence['score']}% — {confluence['verdict']}\n"
+                            confluence_line = f"🧭 درجة التطابق: {confluence['score']}% — {confluence['verdict']}\n" if confluence else ""
                             entry_p = plan.get("entry_price")
                             sl_p = plan.get("stop_loss_price")
                             tp_p = plan.get("target_price")
@@ -1143,10 +1173,14 @@ with tab_monitor:
                                 f"الهدف: {plan.get('target_note', '—')}\n"
                                 f"المدة التقريبية: {plan.get('estimated_duration', '—')}"
                             )
-                            if enable_telegram and telegram_token and telegram_chat_id:
-                                send_telegram_alert(telegram_token, telegram_chat_id, rec_msg)
-                            if enable_ntfy and ntfy_topic:
-                                send_ntfy_alert(ntfy_topic, rec_msg, title=f"🎯 توصية جديدة: {item['_symbol']}", priority=5)
+                            meets_threshold = (confluence is None) or (confluence["score"] >= min_confluence_for_alert)
+                            if meets_threshold:
+                                if enable_telegram and telegram_token and telegram_chat_id:
+                                    send_telegram_alert(telegram_token, telegram_chat_id, rec_msg)
+                                if enable_ntfy and ntfy_topic:
+                                    send_ntfy_alert(ntfy_topic, rec_msg, title=f"🎯 توصية جديدة: {item['_symbol']}", priority=5)
+                            else:
+                                st.caption(f"🔇 توصية {item['_symbol']} تحت الحد الأدنى للتنبيه ({confluence['score']}% < {min_confluence_for_alert}%) — تم الحفظ بدون إرسال إشعار.")
 
             if newly_found:
                 st.success(f"✅ تم رصد {len(newly_found)} خبراً قوياً جديداً في آخر دورة فحص.")
@@ -1223,6 +1257,19 @@ with tab_recommendations:
                 )
         else:
             st.caption("ما فيه صفقات مغلقة بعد — اضغط 'تحديث حالة الصفقات' للفحص، أو انتظر توصيات جديدة تتحقق مع الوقت.")
+
+    # ---- دقة درجة التطابق الفعلية (Feedback Loop) ----
+    st.divider()
+    st.markdown("##### 🔁 دقة درجة التطابق التاريخية (مقارنة بالأداء الفعلي)")
+    confluence_stats = get_confluence_accuracy_stats()
+    if confluence_stats:
+        st.dataframe(pd.DataFrame(confluence_stats), use_container_width=True, hide_index=True)
+        st.caption(
+            "هذا الجدول يقارن درجة التطابق اللي أعطاها النظام وقت التوصية بالنتيجة الفعلية اللي صارت — "
+            "لو فئة '75-95%' فعلاً عندها أعلى نسبة نجاح، يعني درجة التطابق موثوقة. لو مو كذا، يعني الوزن يحتاج تعديل."
+        )
+    else:
+        st.caption("لا توجد بيانات كافية بعد — يحتاج تراكم عدة صفقات مغلقة فيها درجة تطابق محفوظة (بعد آخر تحديث للمنصة).")
 
     st.caption(
         "💡 الحالة تُحدَّث فقط لما تضغط الزر أعلاه (ما تتحدث تلقائياً بالخلفية). "

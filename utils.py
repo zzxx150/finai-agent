@@ -1812,3 +1812,36 @@ def get_confluence_accuracy_stats() -> List[Dict]:
                 "نسبة النجاح الفعلية": f"{round((sum(outcomes) / len(outcomes)) * 100, 1)}%",
             })
     return results
+
+
+# ----------------------------------------------------------------------
+# 29) بيانات الشريط المتحرك (Ticker) لأهم الأسهم والمؤشرات
+# ----------------------------------------------------------------------
+
+def get_ticker_data() -> List[Dict]:
+    """
+    يجلب أسعار مجموعة أسهم ومؤشرات رئيسية دفعة واحدة (طلب واحد بدل عدة
+    طلبات) لعرضها بشريط متحرك أعلى الصفحة، بأسلوب المنصات المالية
+    العالمية. يستخدم yf.download بدل yf.Ticker المتكرر لتقليل زمن التحميل.
+    """
+    symbols = ["AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "TSLA", "META", "SPY", "QQQ", "BTC-USD"]
+    try:
+        data = yf.download(symbols, period="2d", group_by="ticker", progress=False, threads=True)
+        rows = []
+        for sym in symbols:
+            try:
+                closes = data[sym]["Close"].dropna()
+                if len(closes) < 1:
+                    continue
+                current = float(closes.iloc[-1])
+                if len(closes) >= 2:
+                    prev = float(closes.iloc[-2])
+                    change_pct = ((current - prev) / prev) * 100
+                else:
+                    change_pct = 0.0
+                rows.append({"symbol": sym, "price": round(current, 2), "change_pct": round(change_pct, 2)})
+            except Exception:
+                continue
+        return rows
+    except Exception:
+        return []

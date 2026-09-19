@@ -1845,3 +1845,76 @@ def get_ticker_data() -> List[Dict]:
         return rows
     except Exception:
         return []
+
+
+# ----------------------------------------------------------------------
+# 30) فحص التوافق الشرعي (Shariah Compliance) — استرشادي وليس فتوى
+# ----------------------------------------------------------------------
+
+SHARIAH_EXCLUDED_KEYWORDS = [
+    "bank", "insurance", "financial services", "casino", "gambling", "lottery",
+    "brewer", "distiller", "winer", "wineries", "beverages - wineries", "tobacco",
+    "cigarette", "adult", "pornograph", "pork", "resorts & casinos",
+    "credit services", "mortgage", "capital markets",
+]
+
+
+def check_shariah_compliance(symbol: str) -> Dict:
+    """
+    فحص تقريبي استرشادي لمدى توافق السهم مع معايير مالية إسلامية شائعة
+    (شبيهة بمنهجية AAOIFI ومؤشر Dow Jones الإسلامي)، عبر مرحلتين:
+    1) فحص نشاط الشركة (القطاع/الصناعة) — استبعاد البنوك التقليدية،
+       التأمين التقليدي، الكحول، القمار، التبغ، المحتوى الجنسي، لحم الخنزير.
+    2) فحص نسب مالية: الدين إلى القيمة السوقية، والنقد وشبه النقد إلى
+       القيمة السوقية — يجب أن تكون كل نسبة أقل من 33% تقريباً.
+
+    ⚠️ هذا تصنيف آلي استرشادي بمنهجية شائعة واحدة من عدة منهجيات فقهية
+    مختلفة، وليس فتوى شرعية. راجع مصدراً شرعياً موثوقاً أو خدمة متخصصة
+    (مثل Zoya أو Islamicly) قبل الاعتماد عليه بقرار استثماري.
+    """
+    try:
+        t = yf.Ticker(symbol)
+        info = t.info if hasattr(t, "info") else {}
+
+        sector = (info.get("sector") or "").lower()
+        industry = (info.get("industry") or "").lower()
+        combined = f"{sector} {industry}"
+
+        for kw in SHARIAH_EXCLUDED_KEYWORDS:
+            if kw in combined:
+                return {
+                    "status": "غير متوافق",
+                    "reason": f"نشاط الشركة (القطاع: {info.get('sector', '—')} / الصناعة: {info.get('industry', '—')}) ضمن الأنشطة المستبعدة عادةً",
+                    "stage": "نشاط الشركة",
+                }
+
+        market_cap = info.get("marketCap")
+        total_debt = info.get("totalDebt")
+        total_cash = info.get("totalCash")
+
+        if not market_cap or market_cap <= 0:
+            return {"status": "غير محدد", "reason": "بيانات القيمة السوقية غير متوفرة لإجراء فحص النسب المالية.", "stage": "بيانات ناقصة"}
+
+        debt_ratio = (total_debt / market_cap) if total_debt else 0
+        cash_ratio = (total_cash / market_cap) if total_cash else 0
+
+        if debt_ratio > 0.33:
+            return {
+                "status": "غير متوافق",
+                "reason": f"نسبة الدين إلى القيمة السوقية ({round(debt_ratio * 100, 1)}%) تتجاوز الحد الشائع (33%)",
+                "stage": "نسب مالية", "debt_ratio": round(debt_ratio * 100, 1), "cash_ratio": round(cash_ratio * 100, 1),
+            }
+        if cash_ratio > 0.33:
+            return {
+                "status": "غير متوافق",
+                "reason": f"نسبة النقد وشبه النقد إلى القيمة السوقية ({round(cash_ratio * 100, 1)}%) تتجاوز الحد الشائع (33%)",
+                "stage": "نسب مالية", "debt_ratio": round(debt_ratio * 100, 1), "cash_ratio": round(cash_ratio * 100, 1),
+            }
+
+        return {
+            "status": "متوافق تقريباً",
+            "reason": "اجتاز فحص النشاط والنسب المالية الأساسية حسب المنهجية المستخدمة",
+            "stage": "اجتاز الفحصين", "debt_ratio": round(debt_ratio * 100, 1), "cash_ratio": round(cash_ratio * 100, 1),
+        }
+    except Exception as e:
+        return {"status": "غير محدد", "reason": f"تعذر إجراء الفحص: {e}", "stage": "خطأ"}

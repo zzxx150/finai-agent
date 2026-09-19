@@ -61,6 +61,7 @@ from utils import (
     fetch_earnings_calendar,
     run_technical_backtest,
     has_recent_open_recommendation,
+    calculate_confluence_score,
 )
 
 load_dotenv()
@@ -855,6 +856,29 @@ with tab_search:
                                         )
 
                                         plan = analysis.get("trade_plan", {})
+
+                                        # ---- درجة تطابق الإشارات (Confluence Score) ----
+                                        if "دخول" in plan.get("action", ""):
+                                            with st.spinner("جاري حساب درجة تطابق الإشارات..."):
+                                                confluence = calculate_confluence_score(
+                                                    symbol_input, plan.get("action", ""),
+                                                    analysis.get("sentiment", ""), analysis.get("is_likely_official", False),
+                                                )
+                                            st.markdown("##### 🧭 درجة تطابق الإشارات (Confluence Score)")
+                                            conf_color = "green" if confluence["score"] >= 75 else ("orange" if confluence["score"] >= 55 else "red")
+                                            st.markdown(f"### :{conf_color}[{confluence['score']}%] — {confluence['verdict']}")
+                                            if confluence["confirmations"]:
+                                                st.markdown("**مؤكِّدات:**")
+                                                for c in confluence["confirmations"]:
+                                                    st.write(c)
+                                            if confluence["conflicts"]:
+                                                st.markdown("**تعارضات:**")
+                                                for c in confluence["conflicts"]:
+                                                    st.write(c)
+                                            if confluence["unavailable"]:
+                                                st.caption("غير متوفر: " + "، ".join(confluence["unavailable"]))
+                                            st.caption("⚠️ هذي درجة استرشادية إحصائية تجمع عدة مؤشرات، وليست ضماناً لنجاح الصفقة.")
+
                                         st.markdown("##### 🎯 خطة التداول المقترحة (استرشادية)")
                                         if plan.get("entry_price") and plan.get("stop_loss_price") and plan.get("target_price"):
                                             pc1, pc2, pc3 = st.columns(3)
@@ -1096,6 +1120,13 @@ with tab_monitor:
                                 created_by=st.session_state.get("username", "system"),
                             )
                             plan = analysis.get("trade_plan", {})
+                            confluence_line = ""
+                            if "دخول" in plan.get("action", ""):
+                                confluence = calculate_confluence_score(
+                                    item["_symbol"], plan.get("action", ""),
+                                    analysis.get("sentiment", ""), analysis.get("is_likely_official", False),
+                                )
+                                confluence_line = f"🧭 درجة التطابق: {confluence['score']}% — {confluence['verdict']}\n"
                             entry_p = plan.get("entry_price")
                             sl_p = plan.get("stop_loss_price")
                             tp_p = plan.get("target_price")
@@ -1104,6 +1135,7 @@ with tab_monitor:
                                 price_line = f"📍 دخول: ${entry_p} | وقف: ${sl_p} | هدف: ${tp_p}\n"
                             rec_msg = (
                                 f"🎯 توصية جديدة: {item['_symbol']}\n"
+                                f"{confluence_line}"
                                 f"الإجراء: {plan.get('action', '—')}\n"
                                 f"{price_line}"
                                 f"الدخول: {plan.get('entry_note', '—')}\n"

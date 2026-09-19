@@ -66,6 +66,7 @@ from utils import (
     calculate_atr,
     check_sector_concentration,
     get_confluence_accuracy_stats,
+    get_ticker_data,
 )
 
 load_dotenv()
@@ -291,8 +292,84 @@ input, textarea, select, .stSelectbox div[data-baseweb="select"] {
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: #0B0E14; }
 ::-webkit-scrollbar-thumb { background: linear-gradient(180deg, #22D3A8, #1BB894); border-radius: 10px; }
+
+/* ---------- تأثيرات ثلاثية الأبعاد (3D) للبطاقات ---------- */
+[data-testid="stMetric"], [data-testid="stExpander"], [data-testid="stAlert"] {
+    transform-style: preserve-3d;
+    perspective: 800px;
+}
+[data-testid="stMetric"]:hover {
+    transform: translateY(-4px) rotateX(3deg) rotateY(-2deg) scale(1.01);
+    box-shadow: 0 18px 38px rgba(0,0,0,0.35), 0 0 0 1px rgba(34,211,168,0.25), inset 0 1px 0 rgba(255,255,255,0.08);
+}
+[data-testid="stTabs"] button[role="tab"][aria-selected="true"] {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 20px rgba(34,211,168,0.3), 0 2px 0 rgba(0,0,0,0.3);
+}
+.stButton button[kind="primary"]:hover, .stFormSubmitButton button[kind="primary"]:hover {
+    transform: translateY(-2px) scale(1.015);
+    box-shadow: 0 10px 24px rgba(34,211,168,0.35), 0 2px 0 rgba(0,0,0,0.2);
+}
+
+/* ---------- الشريط المتحرك (Ticker) ---------- */
+.ticker-wrap {
+    width: 100%;
+    overflow: hidden;
+    background: linear-gradient(90deg, #0A0E16, #10141F, #0A0E16);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 12px;
+    padding: 10px 0;
+    margin-bottom: 14px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.04);
+}
+.ticker-track {
+    display: inline-flex;
+    white-space: nowrap;
+    animation: ticker-scroll 40s linear infinite;
+}
+.ticker-wrap:hover .ticker-track { animation-play-state: paused; }
+@keyframes ticker-scroll {
+    0%   { transform: translateX(0); }
+    100% { transform: translateX(-50%); }
+}
+.ticker-item {
+    display: inline-flex;
+    align-items: center;
+    padding: 0 22px;
+    font-weight: 600;
+    font-size: 0.92rem;
+    border-left: 1px solid rgba(255,255,255,0.08);
+}
+.ticker-symbol { color: #C7CFDD; margin-left: 8px; }
+.ticker-price { color: #F5F8FC; margin-left: 8px; }
+.ticker-up { color: #34D399; }
+.ticker-down { color: #F87171; }
 </style>
 """, unsafe_allow_html=True)
+
+# ----------------------------------------------------------------------
+# شريط الأسعار المتحرك (Ticker) — يظهر بأعلى كل صفحات التطبيق
+# ----------------------------------------------------------------------
+if "ticker_data" not in st.session_state or "ticker_fetched_at" not in st.session_state or \
+   (dt.datetime.now() - st.session_state.get("ticker_fetched_at", dt.datetime.min)).total_seconds() > 300:
+    st.session_state["ticker_data"] = get_ticker_data()
+    st.session_state["ticker_fetched_at"] = dt.datetime.now()
+
+_ticker_rows = st.session_state.get("ticker_data", [])
+if _ticker_rows:
+    _items_html = ""
+    for _row in _ticker_rows * 2:  # تكرار القائمة مرتين لضمان تمرير سلس بلا فراغ
+        _cls = "ticker-up" if _row["change_pct"] >= 0 else "ticker-down"
+        _arrow = "▲" if _row["change_pct"] >= 0 else "▼"
+        _items_html += (
+            f'<span class="ticker-item"><span class="ticker-symbol">{_row["symbol"]}</span>'
+            f'<span class="ticker-price">${_row["price"]:,}</span>'
+            f'<span class="{_cls}">{_arrow} {abs(_row["change_pct"])}%</span></span>'
+        )
+    st.markdown(
+        f'<div class="ticker-wrap"><div class="ticker-track">{_items_html}</div></div>',
+        unsafe_allow_html=True,
+    )
 
 
 # ----------------------------------------------------------------------

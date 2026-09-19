@@ -1467,3 +1467,152 @@ def run_technical_backtest(symbol: str, months: int = 3) -> Dict:
         }
     except Exception as e:
         return {"error": str(e)}
+
+
+# ----------------------------------------------------------------------
+# 24) درجة تطابق الإشارات (Confluence Score) — يجمع الفني + السيولة +
+#     إجماع المحللين + مصداقية المصدر بنسبة واحدة واضحة قبل الدخول
+# ----------------------------------------------------------------------
+
+def calculate_confluence_score(symbol: str, action: str, sentiment: str, is_likely_official: bool) -> Dict:
+    """
+    يحسب درجة تطابق شاملة (0-95%) تجمع بين عدة مصادر مستقلة:
+    - مصداقية مصدر الخبر (بيان رسمي أو إشاعة)
+    - قوة المعنويات من تحليل الذكاء الاصطناعي
+    - مؤشرات فنية (RSI, MACD)
+    - اختراق دعم/مقاومة
+    - دخول سيولة حديثة
+    - إجماع المحللين (لو متوفر)
+
+    كل عامل يُصنَّف كـ 'مؤكِّد' (يدعم الصفقة) أو 'متعارض' (يضعفها) أو
+    'غير متوفر'، عشان يشوف المستخدم بالضبط وين الاتفاق ووين التضارب
+    قبل ما يقرر يدخل. هذا مؤشر استرشادي إحصائي، وليس ضماناً لنجاح الصفقة.
+    """
+    is_buy = "شراء" in (action or "") or "دخول" in (action or "") and "بيع" not in (action or "")
+    is_sell = "بيع" in (action or "") or "شورت" in (action or "")
+
+    score = 50  # نقطة بداية محايدة
+    confirmations = []
+    conflicts = []
+    unavailable = []
+
+    # 1) مصداقية المصدر
+    if is_likely_official:
+        score += 8
+        confirmations.append("✅ الخبر يبدو من مصدر رسمي موثوق (بيان صحفي رسمي)")
+    else:
+        conflicts.append("⚠️ الخبر قد يكون شائعة أو غير مؤكد رسمياً")
+        score -= 5
+
+    # 2) قوة المعنويات
+    sentiment_map = {"إيجابي جداً": 15, "إيجابي": 8, "سلبي": -8, "سلبي جداً": -15, "محايد": 0}
+    sent_points = sentiment_map.get(sentiment, 0)
+    if is_sell:
+        sent_points = -sent_points
+    if sent_points > 0:
+        score += sent_points
+        confirmations.append(f"✅ معنويات الخبر ({sentiment}) تدعم اتجاه الصفقة")
+    elif sent_points < 0:
+        score += sent_points
+        conflicts.append(f"⚠️ معنويات الخبر ({sentiment}) تتعارض مع اتجاه الصفقة")
+
+    # 3) المؤشرات الفنية RSI/MACD
+    tech = calculate_technical_indicators(symbol)
+    if "error" in tech:
+        unavailable.append("المؤشرات الفنية (RSI/MACD) غير متوفرة حالياً")
+    else:
+        rsi = tech["rsi"]
+        if is_buy:
+            if rsi <= 30:
+                score += 10
+                confirmations.append(f"✅ RSI ({rsi}) بمنطقة تشبّع بيعي — فرصة ارتداد تدعم الشراء")
+            elif rsi >= 70:
+                score -= 12
+                conflicts.append(f"⚠️ RSI ({rsi}) بمنطقة تشبّع شرائي — مخاطرة تصحيح قريب")
+        elif is_sell:
+            if rsi >= 70:
+                score += 10
+                confirmations.append(f"✅ RSI ({rsi}) بمنطقة تشبّع شرائي — يدعم فرضية الهبوط")
+            elif rsi <= 30:
+                score -= 12
+                conflicts.append(f"⚠️ RSI ({rsi}) بمنطقة تشبّع بيعي — مخاطرة ارتداد ضد الشورت")
+
+        bullish_macd = "🟢" in tech.get("macd_signal", "")
+        bearish_macd = "🔴" in tech.get("macd_signal", "")
+        if is_buy and bullish_macd:
+            score += 8
+            confirmations.append("✅ MACD يعطي إشارة إيجابية حديثة")
+        elif is_buy and bearish_macd:
+            score -= 8
+            conflicts.append("⚠️ MACD يعطي إشارة سلبية حديثة")
+        elif is_sell and bearish_macd:
+            score += 8
+            confirmations.append("✅ MACD يعطي إشارة سلبية حديثة (يدعم الشورت)")
+        elif is_sell and bullish_macd:
+            score -= 8
+            conflicts.append("⚠️ MACD يعطي إشارة إيجابية حديثة (يتعارض مع الشورت)")
+
+    # 4) اختراق الدعم/المقاومة
+    sr = calculate_support_resistance(symbol)
+    if "error" in sr:
+        unavailable.append("مستويات الدعم/المقاومة غير متوفرة حالياً")
+    else:
+        if is_buy and sr.get("broke_resistance"):
+            score += 12
+            confirmations.append("✅ السعر اخترق مستوى مقاومة مهم مؤخراً")
+        elif is_buy and sr.get("broke_support"):
+            score -= 12
+            conflicts.append("⚠️ السعر كسر مستوى دعم مهم مؤخراً")
+        elif is_sell and sr.get("broke_support"):
+            score += 12
+            confirmations.append("✅ السعر كسر مستوى دعم مهم (يدعم الشورت)")
+        elif is_sell and sr.get("broke_resistance"):
+            score -= 12
+            conflicts.append("⚠️ السعر اخترق مقاومة للأعلى (يتعارض مع الشورت)")
+
+    # 5) دخول سيولة حديثة
+    liq = check_liquidity_activity(symbol)
+    if "error" in liq or "status" not in liq:
+        unavailable.append("بيانات السيولة اللحظية غير متوفرة حالياً")
+    else:
+        if "الآن" in liq["status"] or "قبل شوي" in liq["status"]:
+            score += 7
+            confirmations.append("✅ دخلت سيولة تداول ملحوظة على السهم مؤخراً")
+
+    # 6) إجماع المحللين
+    analyst = get_analyst_consensus(symbol)
+    if "error" in analyst or not analyst.get("num_analysts"):
+        unavailable.append("إجماع المحللين غير متوفر لهذا السهم")
+    else:
+        rec = analyst.get("recommendation", "")
+        if is_buy and rec in ("شراء قوي", "شراء"):
+            score += 10
+            confirmations.append(f"✅ إجماع المحللين ({rec}) يدعم الشراء")
+        elif is_buy and rec in ("بيع", "بيع قوي"):
+            score -= 10
+            conflicts.append(f"⚠️ إجماع المحللين ({rec}) يتعارض مع الشراء")
+        elif is_sell and rec in ("بيع", "بيع قوي"):
+            score += 10
+            confirmations.append(f"✅ إجماع المحللين ({rec}) يدعم الشورت")
+        elif is_sell and rec in ("شراء قوي", "شراء"):
+            score -= 10
+            conflicts.append(f"⚠️ إجماع المحللين ({rec}) يتعارض مع الشورت")
+
+    score = max(5, min(95, round(score)))  # لا نعطي أبداً 0% أو 100% — ما فيه يقين مطلق بالأسواق
+
+    if score >= 75:
+        verdict = "🟢 تطابق قوي — عدة إشارات مستقلة تدعم بعضها"
+    elif score >= 55:
+        verdict = "🟡 تطابق متوسط — إشارات إيجابية أكثر من السلبية، لكن فيه تحفظات"
+    elif score >= 40:
+        verdict = "🟠 تطابق ضعيف/متضارب — إشارات متعارضة، كن حذراً"
+    else:
+        verdict = "🔴 تطابق سلبي — أغلب الإشارات تتعارض مع الصفقة"
+
+    return {
+        "score": score,
+        "verdict": verdict,
+        "confirmations": confirmations,
+        "conflicts": conflicts,
+        "unavailable": unavailable,
+    }

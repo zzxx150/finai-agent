@@ -67,6 +67,7 @@ from utils import (
     check_sector_concentration,
     get_confluence_accuracy_stats,
     get_ticker_data,
+    check_shariah_compliance,
 )
 
 load_dotenv()
@@ -148,7 +149,7 @@ st.set_page_config(
     page_title="Financial AI Agent",
     page_icon="📈",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 # ----------------------------------------------------------------------
@@ -344,6 +345,34 @@ input, textarea, select, .stSelectbox div[data-baseweb="select"] {
 .ticker-price { color: #F5F8FC; margin-left: 8px; }
 .ticker-up { color: #34D399; }
 .ticker-down { color: #F87171; }
+
+/* ---------- حيوية إضافية عامة بكل الموقع ---------- */
+[data-testid="stAppViewContainer"] .main .block-container {
+    animation: fade-slide-in 0.55s cubic-bezier(.2,.8,.2,1);
+}
+@keyframes fade-slide-in {
+    0%   { opacity: 0; transform: translateY(10px); }
+    100% { opacity: 1; transform: translateY(0); }
+}
+.stCheckbox, .stRadio, .stSelectbox, .stSlider {
+    transition: all 0.2s ease;
+}
+.stCheckbox:hover, .stRadio:hover { transform: translateX(-2px); }
+[data-testid="stDataFrame"] tbody tr:hover {
+    background: rgba(34,211,168,0.06) !important;
+    transition: background 0.15s ease;
+}
+.live-dot {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: #34D399; margin-left: 6px;
+    box-shadow: 0 0 0 rgba(52,211,153,0.6);
+    animation: pulse-live 1.8s infinite;
+}
+@keyframes pulse-live {
+    0%   { box-shadow: 0 0 0 0 rgba(52,211,153,0.55); }
+    70%  { box-shadow: 0 0 0 8px rgba(52,211,153,0); }
+    100% { box-shadow: 0 0 0 0 rgba(52,211,153,0); }
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -709,6 +738,22 @@ with tab_search:
             price_cols[2].metric("القيمة السوقية", format_large_number(snapshot.get("market_cap")))
             price_cols[3].metric("متوسط حجم التداول", format_large_number(snapshot.get("avg_volume")))
             price_cols[4].metric("القطاع", snapshot.get("sector", "—"))
+
+            # ---- فحص التوافق الشرعي (استرشادي) ----
+            with st.spinner("جاري فحص التوافق الشرعي..."):
+                shariah_info = check_shariah_compliance(symbol_input)
+            shariah_status = shariah_info.get("status", "غير محدد")
+            shariah_badge = {"متوافق تقريباً": "🟢", "غير متوافق": "🔴", "غير محدد": "⚪"}.get(shariah_status, "⚪")
+            st.markdown(f"#### {shariah_badge} التوافق الشرعي: {shariah_status}")
+            st.caption(shariah_info.get("reason", ""))
+            if shariah_info.get("debt_ratio") is not None:
+                sh1, sh2 = st.columns(2)
+                sh1.metric("نسبة الدين/القيمة السوقية", f"{shariah_info['debt_ratio']}%")
+                sh2.metric("نسبة النقد/القيمة السوقية", f"{shariah_info['cash_ratio']}%")
+            st.caption(
+                "⚠️ هذا تصنيف آلي استرشادي بمنهجية مالية شائعة (شبيهة بـ AAOIFI/Dow Jones Islamic Market)، "
+                "وليس فتوى شرعية. راجع مصدراً شرعياً موثوقاً أو خدمة متخصصة قبل الاعتماد عليه بقرار استثماري."
+            )
 
             # ---- فحص الشورت والفلوت ----
             st.markdown("#### 📉 فحص السيولة والضغط الشرائي")
@@ -1268,8 +1313,16 @@ with tab_monitor:
                             price_line = ""
                             if entry_p and sl_p and tp_p:
                                 price_line = f"📍 دخول: ${entry_p} | وقف: ${sl_p} | هدف: ${tp_p}\n"
+                            shariah_badge_line = ""
+                            try:
+                                _sh = check_shariah_compliance(item["_symbol"])
+                                _sh_icon = {"متوافق تقريباً": "🟢", "غير متوافق": "🔴"}.get(_sh.get("status"), "⚪")
+                                shariah_badge_line = f"{_sh_icon} التوافق الشرعي (استرشادي): {_sh.get('status', '—')}\n"
+                            except Exception:
+                                pass
                             rec_msg = (
                                 f"🎯 توصية جديدة: {item['_symbol']}\n"
+                                f"{shariah_badge_line}"
                                 f"{confluence_line}"
                                 f"الإجراء: {plan.get('action', '—')}\n"
                                 f"{price_line}"

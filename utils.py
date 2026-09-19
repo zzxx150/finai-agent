@@ -293,11 +293,18 @@ def analyze_news_with_ai(
 
     price_block = ""
     if price_context and "error" not in price_context:
+        atr_block = ""
+        if price_context.get("atr_suggested_stop_distance"):
+            atr_block = f"""
+مسافة وقف خسارة مقترحة فنياً (بناءً على تقلب السهم ATR): {price_context.get('atr_suggested_stop_distance')}
+مسافة هدف مقترحة فنياً (بناءً على ATR): {price_context.get('atr_suggested_target_distance')}
+استخدم هذي المسافات كمرجع لضبط وقف الخسارة والهدف بما يناسب تقلب السهم الفعلي (سهم متقلب يحتاج مسافة أكبر)."""
         price_block = f"""
 سياق السعر الحالي (استخدمه لتحديد أرقام دخول/خروج تقريبية):
 السعر الحالي: {price_context.get('current_price')}
 مستوى الدعم (20 يوم): {price_context.get('support_20d')}
 مستوى المقاومة (20 يوم): {price_context.get('resistance_20d')}
+{atr_block}
 """
 
     user_content = f"""
@@ -526,6 +533,8 @@ def init_db() -> None:
                 conn.execute(f"ALTER TABLE recommendations ADD COLUMN {col} REAL")
         if "status" not in existing_cols:
             conn.execute("ALTER TABLE recommendations ADD COLUMN status TEXT")
+        if "confluence_score" not in existing_cols:
+            conn.execute("ALTER TABLE recommendations ADD COLUMN confluence_score REAL")
         conn.commit()
 
 
@@ -559,7 +568,7 @@ def has_recent_open_recommendation(symbol: str, hours: int = 24) -> bool:
     return row[0] > 0
 
 
-def save_recommendation(symbol: str, headline: str, analysis: Dict, created_by: str = "system") -> None:
+def save_recommendation(symbol: str, headline: str, analysis: Dict, created_by: str = "system", confluence_score: Optional[float] = None) -> None:
     """يحفظ نتيجة تحليل الذكاء الاصطناعي كتوصية جديدة في قاعدة البيانات."""
     init_db()
     plan = analysis.get("trade_plan", {})
@@ -570,8 +579,8 @@ def save_recommendation(symbol: str, headline: str, analysis: Dict, created_by: 
             (symbol, headline, sentiment, impact_level, confidence, is_likely_official,
              action, entry_price, stop_loss_price, target_price,
              entry_note, stop_loss_note, target_note, estimated_duration,
-             exit_condition, score, created_at, created_by)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+             exit_condition, score, created_at, created_by, confluence_score)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             symbol,
             headline,
@@ -591,6 +600,7 @@ def save_recommendation(symbol: str, headline: str, analysis: Dict, created_by: 
             score,
             dt.datetime.now().isoformat(timespec="seconds"),
             created_by,
+            confluence_score,
         ))
         conn.commit()
 
@@ -1495,6 +1505,7 @@ def calculate_confluence_score(symbol: str, action: str, sentiment: str, is_like
     confirmations = []
     conflicts = []
     unavailable = []
+    risk_warnings = []
 
     # 1) مصداقية المصدر
     if is_likely_official:
@@ -1598,6 +1609,42 @@ def calculate_confluence_score(symbol: str, action: str, sentiment: str, is_like
             score -= 10
             conflicts.append(f"⚠️ إجماع المحللين ({rec}) يتعارض مع الشورت")
 
+    # 7) اتجاه السوق العام (S&P 500)
+    market = fetch_market_trend()
+    if "error" in market:
+        unavailable.append("اتجاه السوق العام غير متوفر حالياً")
+    else:
+        if is_buy and market["direction"] == "up":
+            score += 7
+            confirmations.append(f"✅ السوق العام بزخم صعودي ({market['change_pct']}% آخر 5 أيام) يدعم الشراء")
+        elif is_buy and market["direction"] == "down":
+            score -= 7
+            conflicts.append(f"⚠️ السوق العام بزخم هبوطي ({market['change_pct']}% آخر 5 أيام) يضعف فرص الشراء")
+        elif is_sell and market["direction"] == "down":
+            score += 7
+            confirmations.append(f"✅ السوق العام بزخم هبوطي ({market['change_pct']}% آخر 5 أيام) يدعم الشورت")
+        elif is_sell and market["direction"] == "up":
+            score -= 7
+            conflicts.append(f"⚠️ السوق العام بزخم صعودي ({market['change_pct']}% آخر 5 أيام) يضعف فرص الشورت")
+
+    # تحذيرات مخاطرة مستقلة عن درجة التطابق (لا تؤثر على النسبة، بس تنبيه إضافي)
+    earnings = fetch_earnings_calendar([symbol])
+    if earnings:
+        try:
+            ed = dt.datetime.strptime(earnings[0]["earnings_date"][:10], "%Y-%m-%d").date()
+            days_away = (ed - dt.date.today()).days
+            if 0 <= days_away <= 3:
+                risk_warnings.append(f"📅 إعلان أرباح {symbol} خلال {days_away} يوم — تقلب حاد متوقع، مخاطرة إضافية على وقف الخسارة")
+        except Exception:
+            pass
+
+    concentration = check_sector_concentration(symbol)
+    if concentration.get("same_sector_count", 0) >= 2:
+        risk_warnings.append(
+            f"🏭 عندك {concentration['same_sector_count']} توصية مفتوحة أخرى بنفس قطاع '{concentration['sector']}' "
+            f"({', '.join(concentration.get('same_sector_symbols', []))}) — تركّز مخاطرة على قطاع واحد"
+        )
+
     score = max(5, min(95, round(score)))  # لا نعطي أبداً 0% أو 100% — ما فيه يقين مطلق بالأسواق
 
     if score >= 75:
@@ -1615,4 +1662,153 @@ def calculate_confluence_score(symbol: str, action: str, sentiment: str, is_like
         "confirmations": confirmations,
         "conflicts": conflicts,
         "unavailable": unavailable,
+        "risk_warnings": risk_warnings,
     }
+
+
+# ----------------------------------------------------------------------
+# 25) اتجاه السوق العام (S&P 500) — عامل سابع لدرجة التطابق
+# ----------------------------------------------------------------------
+
+def fetch_market_trend() -> Dict:
+    """
+    يفحص اتجاه مؤشر S&P 500 (عبر صندوق SPY) خلال آخر 5 أيام تداول،
+    لمعرفة هل السوق العام بزخم صعودي أو هبوطي — يفيد كفلتر إضافي
+    (صفقة شراء بسوق هابط بقوة أضعف احتمالاً من نفس الصفقة بسوق صاعد).
+    """
+    try:
+        t = yf.Ticker("SPY")
+        hist = t.history(period="10d")
+        if hist.empty or len(hist) < 5:
+            return {"error": "بيانات السوق العام غير كافية حالياً."}
+        recent = hist["Close"].tail(5)
+        change_pct = ((recent.iloc[-1] - recent.iloc[0]) / recent.iloc[0]) * 100
+        if change_pct > 1:
+            direction = "up"
+        elif change_pct < -1:
+            direction = "down"
+        else:
+            direction = "flat"
+        return {"direction": direction, "change_pct": round(float(change_pct), 2)}
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# ----------------------------------------------------------------------
+# 26) متوسط المدى الحقيقي (ATR) لتحديد وقف/هدف متكيّف مع التقلب
+# ----------------------------------------------------------------------
+
+def calculate_atr(symbol: str, period: int = 14) -> Dict:
+    """
+    يحسب متوسط المدى الحقيقي (ATR) للسهم — مقياس علمي لمدى تقلب السهم
+    يومياً، يُستخدم لتحديد مسافة وقف خسارة/هدف مناسبة لطبيعة كل سهم
+    (سهم متقلب زي MARA يحتاج مسافة أكبر من سهم هادئ زي KO).
+    """
+    try:
+        t = yf.Ticker(symbol)
+        hist = t.history(period="2mo")
+        if hist.empty or len(hist) < period + 1:
+            return {"error": "بيانات غير كافية لحساب ATR."}
+
+        high, low, close = hist["High"], hist["Low"], hist["Close"]
+        prev_close = close.shift(1)
+        tr = pd.concat([
+            high - low,
+            (high - prev_close).abs(),
+            (low - prev_close).abs(),
+        ], axis=1).max(axis=1)
+        atr = tr.rolling(window=period).mean().iloc[-1]
+        current_price = float(close.iloc[-1])
+        atr_pct = (atr / current_price) * 100 if current_price else None
+
+        return {
+            "atr": round(float(atr), 2),
+            "atr_pct": round(float(atr_pct), 2) if atr_pct else None,
+            "suggested_stop_distance": round(float(atr) * 1.5, 2),
+            "suggested_target_distance": round(float(atr) * 3, 2),
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# ----------------------------------------------------------------------
+# 27) تحذير التركّز الزائد على قطاع واحد
+# ----------------------------------------------------------------------
+
+def check_sector_concentration(symbol: str) -> Dict:
+    """
+    يفحص هل فيه توصيات مفتوحة أخرى بنفس قطاع السهم المطلوب، لتنبيه
+    المستخدم إنه معرّض لمخاطرة مركّزة على قطاع واحد بدل التنويع.
+    """
+    try:
+        snap = fetch_stock_snapshot(symbol)
+        target_sector = snap.get("sector")
+        if not target_sector or target_sector == "غير محدد":
+            return {"sector": None, "same_sector_count": 0}
+
+        init_db()
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute("""
+                SELECT DISTINCT symbol FROM recommendations
+                WHERE (status IS NULL OR status = '' OR status = 'open')
+                AND symbol != ?
+            """, (symbol,)).fetchall()
+
+        same_sector_symbols = []
+        for row in rows:
+            other_snap = fetch_stock_snapshot(row["symbol"])
+            if other_snap.get("sector") == target_sector:
+                same_sector_symbols.append(row["symbol"])
+
+        return {
+            "sector": target_sector,
+            "same_sector_count": len(same_sector_symbols),
+            "same_sector_symbols": same_sector_symbols,
+        }
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# ----------------------------------------------------------------------
+# 28) إحصائية دقة درجة التطابق الفعلية (Feedback Loop)
+# ----------------------------------------------------------------------
+
+def get_confluence_accuracy_stats() -> List[Dict]:
+    """
+    يجمّع التوصيات المغلقة (تحقق الهدف/ضرب الوقف) حسب فئة درجة التطابق
+    المحفوظة وقت التوصية، ويحسب نسبة النجاح الفعلية لكل فئة — عشان
+    يشوف المستخدم هل درجة التطابق فعلاً متوافقة مع النتائج الحقيقية،
+    بدل افتراض نظري ثابت.
+    """
+    init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("""
+            SELECT confluence_score, status FROM recommendations
+            WHERE status IN ('hit_target', 'hit_stop')
+            AND confluence_score IS NOT NULL
+        """).fetchall()
+
+    buckets = {"75-95% (قوي)": [], "55-74% (متوسط)": [], "40-54% (ضعيف)": [], "أقل من 40% (سلبي)": []}
+    for row in rows:
+        score = row["confluence_score"]
+        won = 1 if row["status"] == "hit_target" else 0
+        if score >= 75:
+            buckets["75-95% (قوي)"].append(won)
+        elif score >= 55:
+            buckets["55-74% (متوسط)"].append(won)
+        elif score >= 40:
+            buckets["40-54% (ضعيف)"].append(won)
+        else:
+            buckets["أقل من 40% (سلبي)"].append(won)
+
+    results = []
+    for label, outcomes in buckets.items():
+        if outcomes:
+            results.append({
+                "الفئة": label,
+                "عدد الصفقات": len(outcomes),
+                "نسبة النجاح الفعلية": f"{round((sum(outcomes) / len(outcomes)) * 100, 1)}%",
+            })
+    return results

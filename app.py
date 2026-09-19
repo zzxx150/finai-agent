@@ -60,6 +60,7 @@ from utils import (
     check_price_alerts,
     fetch_earnings_calendar,
     run_technical_backtest,
+    has_recent_open_recommendation,
 )
 
 load_dotenv()
@@ -830,10 +831,14 @@ with tab_search:
                                     else:
                                         analysis = suppress_short_if_disabled(analysis, enable_shorts)
                                         analysis = enforce_neutral_wait(analysis)
-                                        save_recommendation(
-                                            symbol_input, headline, analysis,
-                                            created_by=st.session_state.get("username", "system"),
-                                        )
+                                        if has_recent_open_recommendation(symbol_input, hours=24):
+                                            st.info("ℹ️ فيه توصية مفتوحة لنفس السهم خلال آخر 24 ساعة — ما راح تُسجَّل هذي كتوصية جديدة (بس التحليل يظهر لك تحت).")
+                                        else:
+                                            save_recommendation(
+                                                symbol_input, headline, analysis,
+                                                created_by=st.session_state.get("username", "system"),
+                                            )
+                                            st.caption("✅ تم حفظ هذه التوصية في سجل التوصيات (تبويب 📂).")
                                         sentiment_color = {
                                             "إيجابي جداً": "green", "إيجابي": "green",
                                             "محايد": "gray",
@@ -863,7 +868,6 @@ with tab_search:
                                         st.write(f"**⏱️ مدة الصفقة التقريبية:** {plan.get('estimated_duration', '—')}")
                                         st.write(f"**شرط الخروج:** {plan.get('exit_condition', '—')}")
                                         st.warning(analysis.get("risk_warning", ""))
-                                        st.caption("✅ تم حفظ هذه التوصية في سجل التوصيات (تبويب 📂).")
 
 # ========================================================================
 # التبويب 3: مراقبة لحظية للأخبار القوية + تحديث تلقائي كل دقيقة
@@ -1084,30 +1088,33 @@ with tab_monitor:
                     if "error" not in analysis:
                         analysis = suppress_short_if_disabled(analysis, enable_shorts)
                         analysis = enforce_neutral_wait(analysis)
-                        save_recommendation(
-                            item["_symbol"], item["headline"], analysis,
-                            created_by=st.session_state.get("username", "system"),
-                        )
-                        plan = analysis.get("trade_plan", {})
-                        entry_p = plan.get("entry_price")
-                        sl_p = plan.get("stop_loss_price")
-                        tp_p = plan.get("target_price")
-                        price_line = ""
-                        if entry_p and sl_p and tp_p:
-                            price_line = f"📍 دخول: ${entry_p} | وقف: ${sl_p} | هدف: ${tp_p}\n"
-                        rec_msg = (
-                            f"🎯 توصية جديدة: {item['_symbol']}\n"
-                            f"الإجراء: {plan.get('action', '—')}\n"
-                            f"{price_line}"
-                            f"الدخول: {plan.get('entry_note', '—')}\n"
-                            f"وقف الخسارة: {plan.get('stop_loss_note', '—')}\n"
-                            f"الهدف: {plan.get('target_note', '—')}\n"
-                            f"المدة التقريبية: {plan.get('estimated_duration', '—')}"
-                        )
-                        if enable_telegram and telegram_token and telegram_chat_id:
-                            send_telegram_alert(telegram_token, telegram_chat_id, rec_msg)
-                        if enable_ntfy and ntfy_topic:
-                            send_ntfy_alert(ntfy_topic, rec_msg, title=f"🎯 توصية جديدة: {item['_symbol']}", priority=5)
+                        if has_recent_open_recommendation(item["_symbol"], hours=24):
+                            st.caption(f"ℹ️ تم تجاهل حفظ توصية مكررة لـ {item['_symbol']} (فيه توصية مفتوحة خلال آخر 24 ساعة).")
+                        else:
+                            save_recommendation(
+                                item["_symbol"], item["headline"], analysis,
+                                created_by=st.session_state.get("username", "system"),
+                            )
+                            plan = analysis.get("trade_plan", {})
+                            entry_p = plan.get("entry_price")
+                            sl_p = plan.get("stop_loss_price")
+                            tp_p = plan.get("target_price")
+                            price_line = ""
+                            if entry_p and sl_p and tp_p:
+                                price_line = f"📍 دخول: ${entry_p} | وقف: ${sl_p} | هدف: ${tp_p}\n"
+                            rec_msg = (
+                                f"🎯 توصية جديدة: {item['_symbol']}\n"
+                                f"الإجراء: {plan.get('action', '—')}\n"
+                                f"{price_line}"
+                                f"الدخول: {plan.get('entry_note', '—')}\n"
+                                f"وقف الخسارة: {plan.get('stop_loss_note', '—')}\n"
+                                f"الهدف: {plan.get('target_note', '—')}\n"
+                                f"المدة التقريبية: {plan.get('estimated_duration', '—')}"
+                            )
+                            if enable_telegram and telegram_token and telegram_chat_id:
+                                send_telegram_alert(telegram_token, telegram_chat_id, rec_msg)
+                            if enable_ntfy and ntfy_topic:
+                                send_ntfy_alert(ntfy_topic, rec_msg, title=f"🎯 توصية جديدة: {item['_symbol']}", priority=5)
 
             if newly_found:
                 st.success(f"✅ تم رصد {len(newly_found)} خبراً قوياً جديداً في آخر دورة فحص.")

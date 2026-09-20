@@ -71,6 +71,10 @@ from utils import (
     get_news_ticker_items,
     get_next_market_transition,
     get_market_sentiment_gauge,
+    add_portfolio_position,
+    get_portfolio_positions,
+    delete_portfolio_position,
+    calculate_portfolio_pnl,
 )
 
 load_dotenv()
@@ -752,23 +756,25 @@ with st.expander("🕐 أوقات التداول الكاملة بالسوق ا�
 
 (
     tab_dashboard,
-    tab_search,
     tab_monitor,
     tab_gainers,
+    tab_search,
     tab_recommendations,
-    tab_alerts,
+    tab_portfolio,
     tab_earnings,
+    tab_alerts,
     tab_risk,
     tab_watch,
 ) = st.tabs(
     [
         "🗺️ لوحة الأخبار اليومية",
-        "🔍 تحليل سهم محدد",
         "🚨 مراقبة لحظية",
         "🏆 الأكثر ربحاً",
+        "🔍 تحليل سهم محدد",
         "📂 سجل التوصيات",
-        "🔔 تنبيهات سعرية",
+        "💼 محفظتي",
         "📅 تقويم الأرباح",
+        "🔔 تنبيهات سعرية",
         "🎯 حاسبة المخاطر",
         "📋 متابعة سريعة",
     ]
@@ -1718,6 +1724,77 @@ with tab_alerts:
                 st.rerun()
 
     st.caption("💡 الفحص يدوي بالزر أعلاه حالياً (ما يشتغل تلقائياً بالخلفية). اضغطه كل ما تبي تتأكد من أسعار تنبيهاتك.")
+
+
+# ========================================================================
+# التبويب الجديد: محفظتي الفعلية (صفقاتك الحقيقية، مو توصيات AI)
+# ========================================================================
+with tab_portfolio:
+    st.subheader("💼 محفظتي الفعلية")
+    st.caption("سجّل هنا الصفقات اللي دخلتها فعلاً بأموالك الحقيقية (مو توصيات الذكاء الاصطناعي)، وتابع ربحها/خسارتها الحية.")
+
+    with st.form("add_position_form"):
+        pc1, pc2, pc3, pc4 = st.columns(4)
+        with pc1:
+            pos_symbol = st.text_input("رمز السهم", placeholder="مثال: AAPL")
+        with pc2:
+            pos_qty = st.number_input("عدد الأسهم", min_value=0.0, step=1.0)
+        with pc3:
+            pos_entry = st.number_input("سعر الدخول ($)", min_value=0.0, step=0.5)
+        with pc4:
+            pos_date = st.date_input("تاريخ الدخول", value=dt.date.today())
+        add_position_submitted = st.form_submit_button("➕ أضف الصفقة لمحفظتي", type="primary")
+
+    if add_position_submitted:
+        if not pos_symbol or pos_qty <= 0 or pos_entry <= 0:
+            st.error("لازم تعبّي رمز السهم وعدد الأسهم وسعر الدخول (أكبر من صفر).")
+        else:
+            add_portfolio_position(
+                pos_symbol.strip().upper(), pos_qty, pos_entry, pos_date.isoformat(),
+                created_by=st.session_state.get("username", "system"),
+            )
+            st.success(f"✅ تم إضافة {pos_qty} سهم من {pos_symbol.upper()} لمحفظتك.")
+            st.rerun()
+
+    st.divider()
+
+    if st.button("🔄 تحديث أسعار المحفظة الحية"):
+        with st.spinner("جاري جلب الأسعار الحالية..."):
+            st.session_state["portfolio_pnl"] = calculate_portfolio_pnl()
+
+    if "portfolio_pnl" not in st.session_state:
+        st.session_state["portfolio_pnl"] = calculate_portfolio_pnl()
+
+    pnl_data = st.session_state["portfolio_pnl"]
+
+    if not pnl_data["positions"]:
+        st.info("محفظتك فاضية حالياً — أضف أول صفقة من الفورم أعلاه.")
+    else:
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("💰 إجمالي المستثمر", f"${pnl_data['total_invested']:,.2f}")
+        m2.metric("📊 القيمة الحالية", f"${pnl_data['total_current_value']:,.2f}")
+        pnl_color = "normal" if pnl_data["total_pnl"] >= 0 else "inverse"
+        m3.metric("الربح/الخسارة", f"${pnl_data['total_pnl']:,.2f}", delta=f"{pnl_data['total_pnl_pct']}%")
+        m4.metric("عدد الصفقات", len(pnl_data["positions"]))
+
+        st.divider()
+        for pos in pnl_data["positions"]:
+            with st.container(border=True):
+                pcol1, pcol2, pcol3, pcol4, pcol5 = st.columns([1.5, 1, 1, 1.5, 0.7])
+                pcol1.markdown(f"**{pos['symbol']}** — {pos['quantity']} سهم")
+                pcol2.caption(f"دخول: ${pos['entry_price']}")
+                if pos.get("current_price") is not None:
+                    pcol3.caption(f"حالي: ${pos['current_price']:.2f}")
+                    pnl_sign = "🟢" if pos["pnl"] >= 0 else "🔴"
+                    pcol4.markdown(f"{pnl_sign} ${pos['pnl']:,.2f} ({pos['pnl_pct']}%)")
+                else:
+                    pcol3.caption("السعر غير متوفر")
+                if pcol5.button("🗑️", key=f"del_pos_{pos['id']}"):
+                    delete_portfolio_position(pos["id"])
+                    st.session_state.pop("portfolio_pnl", None)
+                    st.rerun()
+
+        st.caption("⚠️ الأسعار تُحدَّث فقط لما تضغط زر 'تحديث أسعار المحفظة الحية' أعلاه، وليست حية تلقائياً بالخلفية.")
 
 
 # ========================================================================

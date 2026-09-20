@@ -69,6 +69,8 @@ from utils import (
     get_ticker_data,
     check_shariah_compliance,
     get_news_ticker_items,
+    get_next_market_transition,
+    get_market_sentiment_gauge,
 )
 
 load_dotenv()
@@ -673,6 +675,64 @@ if market_status.get("next_holiday"):
     )
 elif market_status.get("detail"):
     status_cols[2].markdown(f"**ℹ️ ملاحظة:** {market_status['detail']}")
+
+# ---- عدّاد تنازلي حي لفتح/إغلاق السوق + مقياس مزاج السوق ----
+gauge_col1, gauge_col2 = st.columns([1, 1])
+
+with gauge_col1:
+    transition = get_next_market_transition()
+    if "error" not in transition:
+        st.markdown(f"**⏱️ {transition['label']}:**")
+        components.html(f"""
+        <div id="countdown-box" style="
+            font-family:'Tajawal',sans-serif; font-size:2rem; font-weight:800;
+            background:linear-gradient(100deg,#22D3A8,#4FD1FF);
+            -webkit-background-clip:text; -webkit-text-fill-color:transparent;
+            direction:ltr; text-align:right; letter-spacing:1px;">--:--:--</div>
+        <script>
+        const target = new Date("{transition['target_utc_iso']}").getTime();
+        function tick() {{
+            const now = new Date().getTime();
+            let diff = Math.max(0, target - now);
+            const h = String(Math.floor(diff / 3600000)).padStart(2,'0');
+            const m = String(Math.floor((diff % 3600000) / 60000)).padStart(2,'0');
+            const s = String(Math.floor((diff % 60000) / 1000)).padStart(2,'0');
+            document.getElementById('countdown-box').innerText = h + ':' + m + ':' + s;
+        }}
+        tick();
+        setInterval(tick, 1000);
+        </script>
+        """, height=55)
+
+with gauge_col2:
+    gauge = get_market_sentiment_gauge()
+    st.markdown(f"**🧭 مقياس مزاج تحليلاتك (آخر 48 ساعة):**")
+    _needle_angle = -90 + (gauge["score"] / 100) * 180
+    components.html(f"""
+    <div style="font-family:'Tajawal',sans-serif; text-align:center;">
+      <svg width="180" height="100" viewBox="0 0 180 100">
+        <defs>
+          <linearGradient id="gaugeGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+            <stop offset="0%" stop-color="#F87171"/>
+            <stop offset="50%" stop-color="#FBBF24"/>
+            <stop offset="100%" stop-color="#34D399"/>
+          </linearGradient>
+        </defs>
+        <path d="M 10 90 A 80 80 0 0 1 170 90" fill="none" stroke="url(#gaugeGrad)" stroke-width="14" stroke-linecap="round"/>
+        <line id="needle" x1="90" y1="90" x2="90" y2="25" stroke="#F5F8FC" stroke-width="3"
+              style="transform-origin:90px 90px; transform:rotate(0deg); transition: transform 1.2s cubic-bezier(.2,.8,.2,1);"/>
+        <circle cx="90" cy="90" r="5" fill="#F5F8FC"/>
+      </svg>
+      <div style="color:#F5F8FC; font-weight:800; font-size:1.1rem; margin-top:-6px;">{gauge['score']}/100</div>
+      <div style="color:#A9B2C3; font-size:0.82rem;">{gauge['label']}</div>
+    </div>
+    <script>
+    setTimeout(() => {{
+        document.getElementById('needle').style.transform = 'rotate({_needle_angle}deg)';
+    }}, 150);
+    </script>
+    """, height=170)
+    st.caption(f"مبني على {gauge['count']} تحليل محفوظ خلال آخر 48 ساعة — مقياس خاص بنشاطك، وليس مؤشراً رسمياً للسوق.")
 
 with st.expander("🕐 أوقات التداول الكاملة بالسوق الأمريكي (بتوقيت السعودية)"):
     if "regular_hours_saudi" in market_status:

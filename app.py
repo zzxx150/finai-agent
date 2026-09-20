@@ -1,5 +1,5 @@
 """
-رادار بوش (Bush Radar) — منصة تحليل الأخبار اللحظية وتوجيه المتداول
+رادار بوش (Boosh Radar) — منصة تحليل الأخبار اللحظية وتوجيه المتداول
 ================================================================
 تشغيل محلي:
     streamlit run app.py
@@ -68,6 +68,7 @@ from utils import (
     get_confluence_accuracy_stats,
     get_ticker_data,
     check_shariah_compliance,
+    get_news_ticker_items,
 )
 
 load_dotenv()
@@ -146,7 +147,7 @@ def enforce_neutral_wait(analysis: dict) -> dict:
 
 
 st.set_page_config(
-    page_title="رادار بوش (Bush Radar)",
+    page_title="رادار بوش (Boosh Radar)",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -346,6 +347,41 @@ input, textarea, select, .stSelectbox div[data-baseweb="select"] {
 .ticker-up { color: #34D399; }
 .ticker-down { color: #F87171; }
 
+/* ---------- شريط الأخبار العاجلة (الثاني) ---------- */
+.news-ticker-wrap {
+    width: 100%;
+    overflow: hidden;
+    background: linear-gradient(90deg, #1A0E12, #240F14, #1A0E12);
+    border: 1px solid rgba(248,113,113,0.25);
+    border-radius: 12px;
+    padding: 9px 0;
+    margin-bottom: 16px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.03);
+}
+.news-ticker-track {
+    display: inline-flex;
+    white-space: nowrap;
+    animation: news-ticker-scroll 55s linear infinite;
+}
+.news-ticker-wrap:hover .news-ticker-track { animation-play-state: paused; }
+@keyframes news-ticker-scroll {
+    0%   { transform: translateX(-50%); }
+    100% { transform: translateX(0); }
+}
+.news-ticker-item {
+    display: inline-flex;
+    align-items: center;
+    padding: 0 28px;
+    font-weight: 500;
+    font-size: 0.9rem;
+    color: #F1D9DC;
+    border-left: 1px solid rgba(248,113,113,0.2);
+}
+.news-ticker-tag {
+    background: #F87171; color: #1A0E12; font-weight: 800;
+    font-size: 0.72rem; padding: 2px 8px; border-radius: 999px; margin-left: 10px;
+}
+
 /* ---------- حيوية إضافية عامة بكل الموقع ---------- */
 [data-testid="stAppViewContainer"] .main .block-container {
     animation: fade-slide-in 0.55s cubic-bezier(.2,.8,.2,1);
@@ -400,6 +436,29 @@ if _ticker_rows:
         unsafe_allow_html=True,
     )
 
+# ----------------------------------------------------------------------
+# شريط الأخبار العاجلة المتحرك (الثاني) — أهم الأخبار المؤثرة بالسوق
+# ----------------------------------------------------------------------
+if "news_ticker_data" not in st.session_state or "news_ticker_fetched_at" not in st.session_state or \
+   (dt.datetime.now() - st.session_state.get("news_ticker_fetched_at", dt.datetime.min)).total_seconds() > 300:
+    _finnhub_key_for_ticker = get_secret("FINNHUB_API_KEY", "")
+    st.session_state["news_ticker_data"] = get_news_ticker_items(_finnhub_key_for_ticker) if _finnhub_key_for_ticker else []
+    st.session_state["news_ticker_fetched_at"] = dt.datetime.now()
+
+_news_ticker_rows = st.session_state.get("news_ticker_data", [])
+if _news_ticker_rows:
+    _translated_headlines = get_arabic_translations([r["headline"] for r in _news_ticker_rows])
+    _news_items_html = ""
+    for _row, _headline_ar in list(zip(_news_ticker_rows, _translated_headlines)) * 2:
+        _news_items_html += (
+            f'<span class="news-ticker-item"><span class="news-ticker-tag">عاجل</span>'
+            f'{_headline_ar} — {_row.get("source", "")}</span>'
+        )
+    st.markdown(
+        f'<div class="news-ticker-wrap"><div class="news-ticker-track">{_news_items_html}</div></div>',
+        unsafe_allow_html=True,
+    )
+
 
 # ----------------------------------------------------------------------
 # بوابة تسجيل الدخول — تظهر قبل أي محتوى آخر في التطبيق
@@ -410,7 +469,7 @@ if "authenticated" not in st.session_state:
 
 if not st.session_state["authenticated"]:
     st.title("🔐 تسجيل الدخول")
-    st.caption("منصة رادار بوش (Bush Radar) — الدخول مقتصر على المستخدمين المصرّح لهم")
+    st.caption("منصة رادار بوش (Boosh Radar) — الدخول مقتصر على المستخدمين المصرّح لهم")
 
     login_tab, signup_tab = st.tabs(["دخول", "🆕 حساب جديد"])
 
@@ -547,7 +606,7 @@ with st.sidebar:
 # ----------------------------------------------------------------------
 # رأس الصفحة
 # ----------------------------------------------------------------------
-st.title("📡 رادار بوش (Bush Radar)")
+st.title("📡 رادار بوش (Boosh Radar)")
 st.caption("منصة تحليل الأخبار اللحظية بالذكاء الاصطناعي وتوجيه المتداول")
 
 # ----------------------------------------------------------------------

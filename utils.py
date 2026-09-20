@@ -2029,3 +2029,98 @@ def get_market_sentiment_gauge(hours: int = 48) -> Dict:
         label = "🔴 خوف شديد (تشاؤم مرتفع بالأخبار المحلَّلة)"
 
     return {"score": avg_score, "label": label, "count": len(rows)}
+
+
+# ----------------------------------------------------------------------
+# 34) محفظتي الفعلية (Portfolio Tracker) — صفقاتك الحقيقية، مو توصيات AI
+# ----------------------------------------------------------------------
+
+def init_portfolio_db() -> None:
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS portfolio (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                symbol TEXT,
+                quantity REAL,
+                entry_price REAL,
+                entry_date TEXT,
+                created_by TEXT,
+                created_at TEXT
+            )
+        """)
+        conn.commit()
+
+
+def add_portfolio_position(symbol: str, quantity: float, entry_price: float, entry_date: str, created_by: str = "system") -> None:
+    init_portfolio_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "INSERT INTO portfolio (symbol, quantity, entry_price, entry_date, created_by, created_at) VALUES (?,?,?,?,?,?)",
+            (symbol.upper(), quantity, entry_price, entry_date, created_by, dt.datetime.now().isoformat(timespec="seconds")),
+        )
+        conn.commit()
+
+
+def get_portfolio_positions() -> List[Dict]:
+    init_portfolio_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("SELECT * FROM portfolio ORDER BY entry_date DESC").fetchall()
+        return [dict(r) for r in rows]
+
+
+def delete_portfolio_position(position_id: int) -> None:
+    init_portfolio_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("DELETE FROM portfolio WHERE id = ?", (position_id,))
+        conn.commit()
+
+
+def calculate_portfolio_pnl() -> Dict:
+    """
+    يجيب السعر الحالي الفعلي لكل صفقة بمحفظتك، ويحسب الربح/الخسارة
+    لكل صفقة والإجمالي الكلي للمحفظة.
+    """
+    positions = get_portfolio_positions()
+    if not positions:
+        return {"positions": [], "total_invested": 0, "total_current_value": 0, "total_pnl": 0, "total_pnl_pct": 0}
+
+    enriched = []
+    total_invested = 0.0
+    total_current_value = 0.0
+
+    for pos in positions:
+        snap = fetch_stock_snapshot(pos["symbol"])
+        current_price = snap.get("current_price")
+        invested = pos["quantity"] * pos["entry_price"]
+        total_invested += invested
+
+        if current_price is not None:
+            current_value = pos["quantity"] * current_price
+            pnl = current_value - invested
+            pnl_pct = (pnl / invested) * 100 if invested else 0
+        else:
+            current_value = None
+            pnl = None
+            pnl_pct = None
+
+        total_current_value += current_value if current_value is not None else invested
+
+        enriched.append({
+            **pos,
+            "current_price": current_price,
+            "current_value": current_value,
+            "pnl": pnl,
+            "pnl_pct": pnl_pct,
+        })
+
+    total_pnl = total_current_value - total_invested
+    total_pnl_pct = (total_pnl / total_invested) * 100 if total_invested else 0
+
+    return {
+        "positions": enriched,
+        "total_invested": round(total_invested, 2),
+        "total_current_value": round(total_current_value, 2),
+        "total_pnl": round(total_pnl, 2),
+        "total_pnl_pct": round(total_pnl_pct, 2),
+    }

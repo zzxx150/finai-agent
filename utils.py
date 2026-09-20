@@ -1946,3 +1946,86 @@ def get_news_ticker_items(api_key: str, limit: int = 12) -> List[Dict]:
         if len(result) >= limit:
             break
     return result
+
+
+# ----------------------------------------------------------------------
+# 32) عدّاد تنازلي حقيقي لفتح/إغلاق السوق الأمريكي
+# ----------------------------------------------------------------------
+
+def get_next_market_transition() -> Dict:
+    """
+    يحسب الوقت الدقيق (UTC) لأقرب تحوّل بحالة السوق (فتح أو إغلاق قادم)،
+    عشان يُستخدم بعدّاد تنازلي حي يعمل بالمتصفح مباشرة (JavaScript)
+    بدون الحاجة لإعادة تحميل الصفحة كل ثانية.
+    """
+    if not _ZONEINFO_OK:
+        return {"error": "تعذر حساب التوقيت بدقة حالياً."}
+
+    now_utc = dt.datetime.now(dt.timezone.utc)
+    now_et = now_utc.astimezone(_ET_ZONE)
+    today_et = now_et.date()
+
+    def combine_et(date_obj, hhmm: str) -> dt.datetime:
+        h, m = map(int, hhmm.split(":"))
+        return dt.datetime.combine(date_obj, dt.time(h, m), tzinfo=_ET_ZONE)
+
+    def is_trading_day(d) -> bool:
+        return d.weekday() < 5 and d not in US_MARKET_HOLIDAYS_2026
+
+    market_open_et = combine_et(today_et, MARKET_HOURS_ET["regular_start"])
+    market_close_et = combine_et(today_et, MARKET_HOURS_ET["regular_end"])
+
+    if is_trading_day(today_et) and now_et < market_open_et:
+        target, label = market_open_et, "السوق يفتح خلال"
+    elif is_trading_day(today_et) and now_et < market_close_et:
+        target, label = market_close_et, "السوق يغلق خلال"
+    else:
+        # نبحث عن أقرب يوم تداول قادم
+        next_day = today_et + dt.timedelta(days=1)
+        while not is_trading_day(next_day):
+            next_day += dt.timedelta(days=1)
+        target = combine_et(next_day, MARKET_HOURS_ET["regular_start"])
+        label = "السوق يفتح خلال"
+
+    return {
+        "label": label,
+        "target_utc_iso": target.astimezone(dt.timezone.utc).isoformat(),
+    }
+
+
+# ----------------------------------------------------------------------
+# 33) مقياس مزاج السوق (Fear & Greed) مبني على تحليلاتك الفعلية
+# ----------------------------------------------------------------------
+
+def get_market_sentiment_gauge(hours: int = 48) -> Dict:
+    """
+    يحسب مقياس 'خوف/جشع' (0 = خوف شديد، 100 = جشع شديد) بناءً على توزيع
+    معنويات آخر تحليلات محفوظة بقاعدة بياناتك خلال الفترة المحددة —
+    مقياس خاص بنشاطك الفعلي على المنصة، وليس مؤشر السوق العام الرسمي.
+    """
+    init_db()
+    cutoff = (dt.datetime.now() - dt.timedelta(hours=hours)).isoformat(timespec="seconds")
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute(
+            "SELECT sentiment FROM recommendations WHERE created_at >= ?", (cutoff,)
+        ).fetchall()
+
+    if not rows:
+        return {"score": 50, "label": "⚪ محايد (لا توجد بيانات كافية)", "count": 0}
+
+    weights = {"إيجابي جداً": 100, "إيجابي": 75, "محايد": 50, "سلبي": 25, "سلبي جداً": 0}
+    scores = [weights.get(r[0], 50) for r in rows]
+    avg_score = round(sum(scores) / len(scores))
+
+    if avg_score >= 75:
+        label = "🟢 جشع شديد (تفاؤل مرتفع بالأخبار المحلَّلة)"
+    elif avg_score >= 58:
+        label = "🟢 جشع (تفاؤل عام)"
+    elif avg_score >= 42:
+        label = "⚪ محايد"
+    elif avg_score >= 25:
+        label = "🔴 خوف (تشاؤم عام)"
+    else:
+        label = "🔴 خوف شديد (تشاؤم مرتفع بالأخبار المحلَّلة)"
+
+    return {"score": avg_score, "label": label, "count": len(rows)}

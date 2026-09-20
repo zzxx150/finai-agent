@@ -181,6 +181,42 @@ html, body, [class*="css"], .stMarkdown, .stText, p, span, div, label {
     pointer-events: none;
     z-index: 0;
 }
+/* ---------- كرات ضوء متوهجة متحركة (Glow Orbs) — حيوية قوية بالخلفية ---------- */
+.glow-orb {
+    position: fixed;
+    border-radius: 50%;
+    filter: blur(70px);
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0.55;
+}
+.glow-orb-1 {
+    width: 340px; height: 340px; top: -60px; right: -60px;
+    background: radial-gradient(circle, #22D3A8, transparent 70%);
+    animation: float-orb-1 14s ease-in-out infinite;
+}
+.glow-orb-2 {
+    width: 300px; height: 300px; bottom: -80px; left: -60px;
+    background: radial-gradient(circle, #4FD1FF, transparent 70%);
+    animation: float-orb-2 18s ease-in-out infinite;
+}
+.glow-orb-3 {
+    width: 240px; height: 240px; top: 40%; left: 45%;
+    background: radial-gradient(circle, #A78BFA, transparent 70%);
+    animation: float-orb-3 22s ease-in-out infinite;
+}
+@keyframes float-orb-1 {
+    0%, 100% { transform: translate(0, 0) scale(1); }
+    50%      { transform: translate(-40px, 50px) scale(1.15); }
+}
+@keyframes float-orb-2 {
+    0%, 100% { transform: translate(0, 0) scale(1); }
+    50%      { transform: translate(50px, -40px) scale(1.2); }
+}
+@keyframes float-orb-3 {
+    0%, 100% { transform: translate(0, 0) scale(0.9); opacity: 0.35; }
+    50%      { transform: translate(-30px, -30px) scale(1.1); opacity: 0.55; }
+}
 [data-testid="stSidebar"] {
     background: linear-gradient(180deg, #090C13 0%, #0B0F18 100%);
     border-left: 1px solid rgba(255,255,255,0.06);
@@ -412,11 +448,20 @@ input, textarea, select, .stSelectbox div[data-baseweb="select"] {
 </style>
 """, unsafe_allow_html=True)
 
+st.markdown(
+    '<div class="glow-orb glow-orb-1"></div>'
+    '<div class="glow-orb glow-orb-2"></div>'
+    '<div class="glow-orb glow-orb-3"></div>',
+    unsafe_allow_html=True,
+)
+
 # ----------------------------------------------------------------------
 # شريط الأسعار المتحرك (Ticker) — يظهر بأعلى كل صفحات التطبيق
 # ----------------------------------------------------------------------
+st_autorefresh(interval=60_000, key="header_ticker_autorefresh")
+
 if "ticker_data" not in st.session_state or "ticker_fetched_at" not in st.session_state or \
-   (dt.datetime.now() - st.session_state.get("ticker_fetched_at", dt.datetime.min)).total_seconds() > 300:
+   (dt.datetime.now() - st.session_state.get("ticker_fetched_at", dt.datetime.min)).total_seconds() > 60:
     st.session_state["ticker_data"] = get_ticker_data()
     st.session_state["ticker_fetched_at"] = dt.datetime.now()
 
@@ -440,7 +485,7 @@ if _ticker_rows:
 # شريط الأخبار العاجلة المتحرك (الثاني) — أهم الأخبار المؤثرة بالسوق
 # ----------------------------------------------------------------------
 if "news_ticker_data" not in st.session_state or "news_ticker_fetched_at" not in st.session_state or \
-   (dt.datetime.now() - st.session_state.get("news_ticker_fetched_at", dt.datetime.min)).total_seconds() > 300:
+   (dt.datetime.now() - st.session_state.get("news_ticker_fetched_at", dt.datetime.min)).total_seconds() > 60:
     _finnhub_key_for_ticker = get_secret("FINNHUB_API_KEY", "")
     st.session_state["news_ticker_data"] = get_news_ticker_items(_finnhub_key_for_ticker) if _finnhub_key_for_ticker else []
     st.session_state["news_ticker_fetched_at"] = dt.datetime.now()

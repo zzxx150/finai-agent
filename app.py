@@ -1,5 +1,5 @@
 """
-Financial AI Agent — منصة تحليل الأخبار اللحظية وتوجيه المتداول
+رادار بوش (Bush Radar) — منصة تحليل الأخبار اللحظية وتوجيه المتداول
 ================================================================
 تشغيل محلي:
     streamlit run app.py
@@ -146,7 +146,7 @@ def enforce_neutral_wait(analysis: dict) -> dict:
 
 
 st.set_page_config(
-    page_title="Financial AI Agent",
+    page_title="رادار بوش (Bush Radar)",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="collapsed",
@@ -410,7 +410,7 @@ if "authenticated" not in st.session_state:
 
 if not st.session_state["authenticated"]:
     st.title("🔐 تسجيل الدخول")
-    st.caption("منصة Financial AI Agent — الدخول مقتصر على المستخدمين المصرّح لهم")
+    st.caption("منصة رادار بوش (Bush Radar) — الدخول مقتصر على المستخدمين المصرّح لهم")
 
     login_tab, signup_tab = st.tabs(["دخول", "🆕 حساب جديد"])
 
@@ -547,7 +547,7 @@ with st.sidebar:
 # ----------------------------------------------------------------------
 # رأس الصفحة
 # ----------------------------------------------------------------------
-st.title("📈 Financial AI Agent")
+st.title("📡 رادار بوش (Bush Radar)")
 st.caption("منصة تحليل الأخبار اللحظية بالذكاء الاصطناعي وتوجيه المتداول")
 
 # ----------------------------------------------------------------------

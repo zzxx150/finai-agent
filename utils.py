@@ -1,7 +1,7 @@
 """
 utils.py
 --------
-كل الدوال المساعدة الخاصة بمنصة "رادار بوش (Bush Radar)":
+كل الدوال المساعدة الخاصة بمنصة "رادار بوش (Boosh Radar)":
 - جلب الأخبار (Finnhub)
 - جلب أسعار الأسهم (yfinance)
 - تحليل الأخبار بالذكاء الاصطناعي (OpenAI)
@@ -1918,3 +1918,31 @@ def check_shariah_compliance(symbol: str) -> Dict:
         }
     except Exception as e:
         return {"status": "غير محدد", "reason": f"تعذر إجراء الفحص: {e}", "stage": "خطأ"}
+
+
+# ----------------------------------------------------------------------
+# 31) بيانات شريط الأخبار العاجلة المتحرك (شريط ثاني تحت شريط الأسعار)
+# ----------------------------------------------------------------------
+
+def get_news_ticker_items(api_key: str, limit: int = 12) -> List[Dict]:
+    """
+    يجلب أحدث الأخبار العامة المصنّفة 'عالية التأثير' لعرضها بشريط أخبار
+    متحرك ثانٍ أسفل شريط الأسعار، بأسلوب 'الأخبار العاجلة' بالمنصات
+    المالية العالمية. يرجع العناوين كما هي بالإنجليزية (الترجمة تتم
+    بالواجهة عند العرض عبر خدمة الترجمة المجانية الموجودة أصلاً).
+    """
+    items = fetch_market_news(api_key, category="general", limit=50)
+    if not items or "error" in items[0]:
+        return []
+
+    result = []
+    for item in items:
+        headline = item.get("headline", "")
+        if classify_news_impact(headline) == "مرشّح (High Impact)":
+            result.append({
+                "headline": headline,
+                "source": item.get("source", ""),
+            })
+        if len(result) >= limit:
+            break
+    return result

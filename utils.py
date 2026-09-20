@@ -1,7 +1,7 @@
 """
 utils.py
 --------
-كل الدوال المساعدة الخاصة بمنصة "Financial AI Agent":
+كل الدوال المساعدة الخاصة بمنصة "رادار بوش (Bush Radar)":
 - جلب الأخبار (Finnhub)
 - جلب أسعار الأسهم (yfinance)
 - تحليل الأخبار بالذكاء الاصطناعي (OpenAI)
@@ -886,7 +886,7 @@ def get_market_status() -> Dict:
 # 14) إرسال إشعار عبر ntfy.sh (بديل مجاني لتلغرام/واتساب)
 # ----------------------------------------------------------------------
 
-def send_ntfy_alert(topic: str, message: str, title: str = "Financial AI Agent", priority: int = 3) -> bool:
+def send_ntfy_alert(topic: str, message: str, title: str = "رادار بوش", priority: int = 3) -> bool:
     """
     يرسل إشعار فوري لكل المشتركين بقناة ntfy المحددة.
     نستخدم واجهة JSON الخاصة بـ ntfy (بدل الهيدرز مباشرة) لأنها تدعم

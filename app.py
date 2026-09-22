@@ -1688,7 +1688,7 @@ with tab_recommendations:
     )
 
     st.divider()
-    fc1, fc2 = st.columns([1, 1])
+    fc1, fc2, fc3 = st.columns([1, 1, 1])
     with fc1:
         only_buy = st.checkbox("عرض إشارات الدخول فقط (شراء/بيع)", value=False, key="only_buy_recs")
     with fc2:
@@ -1697,7 +1697,15 @@ with tab_recommendations:
             ["الكل", "❌ ضرب وقف الخسارة فقط (الفاشلة)", "✅ تحقق الهدف فقط (الناجحة)", "🔓 مفتوحة فقط"],
             key="status_filter_recs",
         )
-    recs = get_all_recommendations(limit=200, only_buy_signals=only_buy)
+    with fc3:
+        sort_choice = st.selectbox(
+            "الترتيب",
+            ["🕐 الأحدث أولاً (موصى به)", "💪 الأقوى إشارة أولاً"],
+            key="sort_choice_recs",
+            help="'الأحدث أولاً' يضمن ظهور أي توصية جديدة بالسجل فوراً بغض النظر عن قوتها.",
+        )
+    order_by = "score" if sort_choice.startswith("💪") else "time"
+    recs = get_all_recommendations(limit=500, only_buy_signals=only_buy, order_by=order_by)
 
     if not recs:
         st.info("لا توجد توصيات محفوظة بعد.")

@@ -76,6 +76,7 @@ from utils import (
     delete_portfolio_position,
     calculate_portfolio_pnl,
     cleanup_duplicate_recommendations,
+    enforce_atr_stop_floor,
 )
 
 load_dotenv()
@@ -224,6 +225,60 @@ html, body, [class*="css"], .stMarkdown, .stText, p, span, div, label {
     0%, 100% { transform: translate(0, 0) scale(0.9); opacity: 0.35; }
     50%      { transform: translate(-30px, -30px) scale(1.1); opacity: 0.55; }
 }
+
+/* ---------- تأثير رادار حي يدور بالخلفية (يناسب اسم "رادار بوش") ---------- */
+.radar-container {
+    position: fixed;
+    top: 50%; left: 50%;
+    width: 900px; height: 900px;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    z-index: 0;
+    opacity: 0.20;
+}
+.radar-ring {
+    position: absolute;
+    top: 50%; left: 50%;
+    border: 1px solid rgba(34,211,168,0.35);
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+}
+.radar-ring-1 { width: 220px; height: 220px; }
+.radar-ring-2 { width: 440px; height: 440px; }
+.radar-ring-3 { width: 660px; height: 660px; }
+.radar-ring-4 { width: 880px; height: 880px; }
+.radar-sweep {
+    position: absolute;
+    top: 50%; left: 50%;
+    width: 450px; height: 450px;
+    transform: translate(-50%, -50%);
+    border-radius: 50%;
+    background: conic-gradient(
+        from 0deg,
+        rgba(34,211,168,0.55) 0deg,
+        rgba(34,211,168,0.18) 25deg,
+        transparent 70deg,
+        transparent 360deg
+    );
+    animation: radar-spin 5s linear infinite;
+}
+@keyframes radar-spin {
+    0%   { transform: translate(-50%, -50%) rotate(0deg); }
+    100% { transform: translate(-50%, -50%) rotate(360deg); }
+}
+.radar-dot {
+    position: absolute;
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: #4FD1FF;
+    box-shadow: 0 0 10px 2px rgba(79,209,255,0.8);
+    animation: radar-blip 3s ease-in-out infinite;
+}
+@keyframes radar-blip {
+    0%, 100% { opacity: 0.2; transform: scale(0.8); }
+    50%      { opacity: 1; transform: scale(1.3); }
+}
+
 [data-testid="stSidebar"] {
     background: linear-gradient(180deg, #090C13 0%, #0B0F18 100%);
     border-left: 1px solid rgba(255,255,255,0.06);
@@ -458,7 +513,17 @@ input, textarea, select, .stSelectbox div[data-baseweb="select"] {
 st.markdown(
     '<div class="glow-orb glow-orb-1"></div>'
     '<div class="glow-orb glow-orb-2"></div>'
-    '<div class="glow-orb glow-orb-3"></div>',
+    '<div class="glow-orb glow-orb-3"></div>'
+    '<div class="radar-container">'
+    '  <div class="radar-ring radar-ring-1"></div>'
+    '  <div class="radar-ring radar-ring-2"></div>'
+    '  <div class="radar-ring radar-ring-3"></div>'
+    '  <div class="radar-ring radar-ring-4"></div>'
+    '  <div class="radar-sweep"></div>'
+    '  <div class="radar-dot" style="top:30%; left:65%; animation-delay:0s;"></div>'
+    '  <div class="radar-dot" style="top:60%; left:40%; animation-delay:1.2s;"></div>'
+    '  <div class="radar-dot" style="top:45%; left:75%; animation-delay:2.1s;"></div>'
+    '</div>',
     unsafe_allow_html=True,
 )
 
@@ -1162,6 +1227,9 @@ with tab_search:
                                     else:
                                         analysis = suppress_short_if_disabled(analysis, enable_shorts)
                                         analysis = enforce_neutral_wait(analysis)
+                                        analysis = enforce_atr_stop_floor(analysis, symbol_input)
+                                        if analysis.get("_stop_widened_by_atr"):
+                                            st.info("🛡️ تم توسيع وقف الخسارة تلقائياً ليتماشى مع تقلب السهم الفعلي (كان أضيق من المعقول).")
                                         plan = analysis.get("trade_plan", {})
 
                                         confluence = None
@@ -1460,6 +1528,7 @@ with tab_monitor:
                     if "error" not in analysis:
                         analysis = suppress_short_if_disabled(analysis, enable_shorts)
                         analysis = enforce_neutral_wait(analysis)
+                        analysis = enforce_atr_stop_floor(analysis, item["_symbol"])
                         plan = analysis.get("trade_plan", {})
 
                         confluence = None

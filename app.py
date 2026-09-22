@@ -97,9 +97,10 @@ def get_secret(key: str, default: str = "") -> str:
 
 def get_arabic_translations(texts, openai_api_key: str = "", model: str = "gpt-4o-mini"):
     """
-    يترجم قائمة نصوص للعربية مجاناً بالكامل (خدمة MyMemory) مع تخزين مؤقت
-    بذاكرة الجلسة (session_state)، بحيث أي عنوان خبر تُرجم مرة ما يُعاد
-    ترجمته مرة ثانية حتى لو تكرر ظهوره بتحديثات لاحقة.
+    يترجم قائمة نصوص للعربية بالذكاء الاصطناعي (أدق وأوثق من الترجمة المجانية،
+    وبدون حد يومي محدود يسبب رجوع النص الإنجليزي بصمت)، مع تخزين مؤقت بذاكرة
+    الجلسة (session_state) بحيث أي عنوان خبر تُرجم مرة ما يُعاد ترجمته ثانية.
+    لو ما توفر مفتاح OpenAI، يرجع تلقائياً للترجمة المجانية (MyMemory).
     """
     if "translation_cache" not in st.session_state:
         st.session_state["translation_cache"] = {}
@@ -108,9 +109,15 @@ def get_arabic_translations(texts, openai_api_key: str = "", model: str = "gpt-4
     if not texts:
         return list(texts)
 
+    if not openai_api_key:
+        openai_api_key = get_secret("OPENAI_API_KEY", "")
+
     to_translate = [t for t in texts if t not in cache]
     if to_translate:
-        translated = translate_texts_free(to_translate)
+        if openai_api_key:
+            translated = translate_texts_to_arabic(openai_api_key, to_translate, model=model)
+        else:
+            translated = translate_texts_free(to_translate)
         for orig, trans in zip(to_translate, translated):
             cache[orig] = trans
 

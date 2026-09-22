@@ -605,9 +605,13 @@ def save_recommendation(symbol: str, headline: str, analysis: Dict, created_by: 
         conn.commit()
 
 
-def get_all_recommendations(limit: int = 100, only_buy_signals: bool = False) -> List[Dict]:
+def get_all_recommendations(limit: int = 100, only_buy_signals: bool = False, order_by: str = "time") -> List[Dict]:
     """
-    يرجع كل التوصيات المحفوظة مرتّبة من الأقوى إشارة للأضعف.
+    يرجع كل التوصيات المحفوظة. order_by="time" (الافتراضي) يرتّب من الأحدث
+    للأقدم زمنياً — يضمن ظهور أي توصية جديدة بالسجل بغض النظر عن قوتها،
+    مناسب لأي جدول اسمه "سجل". order_by="score" يرتّب من الأقوى إشارة
+    للأضعف (كان الافتراضي القديم، وكان يسبب اختفاء توصيات جديدة ضعيفة
+    القوة لو تجاوز عدد التوصيات المحفوظة الحد الأقصى).
     only_buy_signals=True يعرض فقط توصيات "دخول شراء" أو "دخول بيع (شورت)".
     """
     init_db()
@@ -616,7 +620,10 @@ def get_all_recommendations(limit: int = 100, only_buy_signals: bool = False) ->
         query = "SELECT * FROM recommendations"
         if only_buy_signals:
             query += " WHERE action LIKE '%دخول%'"
-        query += " ORDER BY score DESC, created_at DESC LIMIT ?"
+        if order_by == "score":
+            query += " ORDER BY score DESC, created_at DESC LIMIT ?"
+        else:
+            query += " ORDER BY created_at DESC LIMIT ?"
         rows = conn.execute(query, (limit,)).fetchall()
         return [dict(r) for r in rows]
 

@@ -75,6 +75,7 @@ from utils import (
     get_portfolio_positions,
     delete_portfolio_position,
     calculate_portfolio_pnl,
+    cleanup_duplicate_recommendations,
 )
 
 load_dotenv()
@@ -1561,6 +1562,11 @@ with tab_recommendations:
                 f"✅ تم فحص {result['checked']} صفقة — "
                 f"تحقق الهدف: {result['hit_target']} | ضرب وقف الخسارة: {result['hit_stop']} | لسا مفتوحة: {result['still_open']}"
             )
+        if st.button("🧹 تنظيف التكرارات القديمة", use_container_width=True):
+            with st.spinner("جاري فحص السجل التاريخي عن تكرارات..."):
+                cleanup_result = cleanup_duplicate_recommendations(hours=24)
+            st.success(f"✅ تم تصنيف {cleanup_result['marked_duplicates']} توصية كتكرار — استُبعدت من حساب نسبة النجاح.")
+            st.rerun()
 
     win_stats = get_win_rate_stats()
     with rc2:
@@ -1639,16 +1645,31 @@ with tab_recommendations:
             st.stop()
 
         df_recs = pd.DataFrame(recs)
+
+        # حساب نسبة مسافة وقف الخسارة عن سعر الدخول (لتشخيص هل الوقف كان ضيق جداً)
+        if "entry_price" in df_recs.columns and "stop_loss_price" in df_recs.columns:
+            df_recs["stop_distance_pct"] = df_recs.apply(
+                lambda r: round(abs(r["entry_price"] - r["stop_loss_price"]) / r["entry_price"] * 100, 2)
+                if pd.notna(r.get("entry_price")) and pd.notna(r.get("stop_loss_price")) and r.get("entry_price")
+                else None,
+                axis=1,
+            )
+
         display_cols = [
             "created_at", "symbol", "action", "الحالة", "sentiment", "confidence",
-            "estimated_duration", "entry_note", "stop_loss_note", "target_note", "score",
+            "estimated_duration", "entry_price", "stop_loss_price", "target_price",
+            "stop_distance_pct", "confluence_score",
+            "entry_note", "stop_loss_note", "target_note", "score",
         ]
         display_cols = [c for c in display_cols if c in df_recs.columns]
         rename_map = {
             "created_at": "الوقت", "symbol": "الرمز", "action": "الإجراء",
             "sentiment": "المعنويات", "confidence": "الثقة %",
-            "estimated_duration": "المدة التقديرية", "entry_note": "الدخول",
-            "stop_loss_note": "وقف الخسارة", "target_note": "الهدف", "score": "درجة الترتيب",
+            "estimated_duration": "المدة التقديرية",
+            "entry_price": "سعر الدخول ($)", "stop_loss_price": "وقف الخسارة ($)", "target_price": "الهدف ($)",
+            "stop_distance_pct": "مسافة الوقف %", "confluence_score": "درجة التطابق",
+            "entry_note": "ملاحظة الدخول",
+            "stop_loss_note": "ملاحظة وقف الخسارة", "target_note": "ملاحظة الهدف", "score": "درجة الترتيب",
         }
         df_display = df_recs[display_cols].rename(columns=rename_map)
         st.dataframe(df_display, use_container_width=True, hide_index=True)

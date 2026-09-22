@@ -2166,3 +2166,56 @@ def cleanup_duplicate_recommendations(hours: int = 24) -> Dict:
         conn.commit()
 
     return {"marked_duplicates": marked}
+
+
+# ----------------------------------------------------------------------
+# 36) فرض حد أدنى إجباري لمسافة وقف الخسارة بناءً على ATR الفعلي
+#     (حل مباشر لمشكلة الصفقات اللي فشلت بسبب وقف ضيق جداً)
+# ----------------------------------------------------------------------
+
+def enforce_atr_stop_floor(analysis: Dict, symbol: str) -> Dict:
+    """
+    يفرض حداً أدنى إجبارياً لمسافة وقف الخسارة بناءً على تقلب السهم
+    الفعلي (ATR)، بدل ما يعتمد على التزام الذكاء الاصطناعي بالاقتراح
+    فقط. لو الوقف اللي رجّعه الـ AI أضيق من هذا الحد، يوسّعه تلقائياً
+    (ويوسّع الهدف بنفس النسبة تقريباً للحفاظ على مخاطرة/عائد معقولة).
+    """
+    plan = analysis.get("trade_plan", {})
+    entry = plan.get("entry_price")
+    stop = plan.get("stop_loss_price")
+    target = plan.get("target_price")
+    action = plan.get("action", "")
+
+    if not (entry and stop and target):
+        return analysis
+
+    atr_info = calculate_atr(symbol)
+    if "error" in atr_info:
+        return analysis
+
+    min_stop_distance = atr_info["suggested_stop_distance"]
+    current_stop_distance = abs(entry - stop)
+
+    if current_stop_distance < min_stop_distance and min_stop_distance > 0:
+        is_short = "بيع" in action or "شورت" in action
+        original_reward = abs(target - entry)
+        rr_ratio = max((original_reward / current_stop_distance) if current_stop_distance else 2, 2)
+        new_target_distance = min_stop_distance * rr_ratio
+
+        if is_short:
+            new_stop = round(entry + min_stop_distance, 2)
+            new_target = round(entry - new_target_distance, 2)
+        else:
+            new_stop = round(entry - min_stop_distance, 2)
+            new_target = round(entry + new_target_distance, 2)
+
+        plan["stop_loss_price"] = new_stop
+        plan["target_price"] = new_target
+        plan["stop_loss_note"] = (
+            (plan.get("stop_loss_note") or "") +
+            f" [تم توسيع الوقف تلقائياً من ${round(current_stop_distance,2)} إلى ${min_stop_distance} ليتماشى مع تقلب السهم الفعلي (ATR)]"
+        ).strip()
+        analysis["trade_plan"] = plan
+        analysis["_stop_widened_by_atr"] = True
+
+    return analysis

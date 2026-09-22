@@ -2124,3 +2124,45 @@ def calculate_portfolio_pnl() -> Dict:
         "total_pnl": round(total_pnl, 2),
         "total_pnl_pct": round(total_pnl_pct, 2),
     }
+
+
+# ----------------------------------------------------------------------
+# 35) تنظيف التكرارات القديمة من سجل التوصيات (قبل إصلاح منع التكرار)
+# ----------------------------------------------------------------------
+
+def cleanup_duplicate_recommendations(hours: int = 24) -> Dict:
+    """
+    يمرّ على كل السجل التاريخي (بما فيه الصفقات المغلقة)، ولكل سهم يحتفظ
+    بأول توصية بكل نافذة 24 ساعة كـ'أساسية'، ويعلّم أي توصية ثانية لنفس
+    السهم خلال نفس النافذة كـ'مكررة' (status = duplicate_ignored) — عشان
+    ما تدخل بحساب نسبة النجاح ولا التوقع الرياضي، وتعطي صورة أدق للأداء
+    الحقيقي. لا يحذف أي بيانات، بس يغيّر الحالة.
+    """
+    init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT id, symbol, created_at, status FROM recommendations ORDER BY symbol, created_at ASC"
+        ).fetchall()
+
+        marked = 0
+        last_seen: Dict[str, dt.datetime] = {}
+        for row in rows:
+            if row["status"] == "duplicate_ignored":
+                continue
+            try:
+                created = dt.datetime.fromisoformat(row["created_at"])
+            except Exception:
+                continue
+
+            symbol = row["symbol"]
+            if symbol in last_seen and (created - last_seen[symbol]).total_seconds() < hours * 3600:
+                conn.execute(
+                    "UPDATE recommendations SET status = 'duplicate_ignored' WHERE id = ?", (row["id"],)
+                )
+                marked += 1
+            else:
+                last_seen[symbol] = created
+        conn.commit()
+
+    return {"marked_duplicates": marked}

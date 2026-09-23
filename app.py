@@ -1643,44 +1643,36 @@ with tab_recommendations:
     st.subheader("📂 سجل التوصيات والصفقات")
     st.caption("كل التوصيات اللي ولّدها الذكاء الاصطناعي (يدوياً أو تلقائياً)، مرتّبة من الأقوى إشارة للأضعف.")
 
-    rc1, rc2 = st.columns([1, 2])
-    with rc1:
-        if st.button("🔄 تحديث حالة الصفقات المفتوحة", use_container_width=True):
-            with st.spinner("جاري مقارنة الصفقات المفتوحة بالأسعار الحالية..."):
-                result = check_and_update_open_recommendations()
-            st.success(
-                f"✅ تم فحص {result['checked']} صفقة — "
-                f"تحقق الهدف: {result['hit_target']} | ضرب وقف الخسارة: {result['hit_stop']} | لسا مفتوحة: {result['still_open']}"
-            )
-        if st.button("🧹 تنظيف التكرارات القديمة", use_container_width=True):
-            with st.spinner("جاري فحص السجل التاريخي عن تكرارات..."):
-                cleanup_result = cleanup_duplicate_recommendations(hours=24)
-            st.success(f"✅ تم تصنيف {cleanup_result['marked_duplicates']} توصية كتكرار — استُبعدت من حساب نسبة النجاح.")
-            st.rerun()
+    if st.button("🔄 تحديث حالة الصفقات المفتوحة", type="primary", use_container_width=True):
+        with st.spinner("جاري مقارنة الصفقات المفتوحة بالأسعار الحالية..."):
+            result = check_and_update_open_recommendations()
+        st.success(
+            f"✅ تم فحص {result['checked']} صفقة — "
+            f"تحقق الهدف: {result['hit_target']} | ضرب وقف الخسارة: {result['hit_stop']} | لسا مفتوحة: {result['still_open']}"
+        )
 
     win_stats = get_win_rate_stats()
-    with rc2:
-        if win_stats["total_closed"] > 0:
-            wc1, wc2, wc3, wc4 = st.columns(4)
-            wc1.metric("✅ تحقق الهدف", win_stats["hit_target"])
-            wc2.metric("❌ ضرب وقف الخسارة", win_stats["hit_stop"])
-            wc3.metric("🔓 لسا مفتوحة", win_stats["still_open"])
-            wc4.metric("📊 نسبة النجاح الفعلية", f"{win_stats['win_rate']}%")
+    if win_stats["total_closed"] > 0:
+        wc1, wc2, wc3, wc4 = st.columns(4)
+        wc1.metric("✅ تحقق الهدف", win_stats["hit_target"])
+        wc2.metric("❌ ضرب وقف الخسارة", win_stats["hit_stop"])
+        wc3.metric("🔓 لسا مفتوحة", win_stats["still_open"])
+        wc4.metric("📊 نسبة النجاح الفعلية", f"{win_stats['win_rate']}%")
 
-            if win_stats.get("avg_risk_reward") is not None:
-                wc5, wc6 = st.columns(2)
-                wc5.metric("⚖️ متوسط المخاطرة/العائد المخطط", f"1 : {win_stats['avg_risk_reward']}")
-                expectancy = win_stats.get("expectancy_r")
-                if expectancy is not None:
-                    exp_label = "✅ إيجابي (مربح إحصائياً)" if expectancy > 0 else "⚠️ سلبي (خاسر إحصائياً)"
-                    wc6.metric("🧮 التوقع الرياضي (لكل وحدة مخاطرة)", f"{expectancy}R", help=exp_label)
-                st.caption(
-                    "التوقع الرياضي (Expectancy) يجمع بين نسبة النجاح ونسبة المخاطرة/العائد بمعادلة واحدة — "
-                    "رقم موجب يعني الاستراتيجية مربحة إحصائياً على المدى الطويل حتى لو نسبة النجاح أقل من 50%، "
-                    "ورقم سالب يعني العكس حتى لو نسبة النجاح عالية."
-                )
-        else:
-            st.caption("ما فيه صفقات مغلقة بعد — اضغط 'تحديث حالة الصفقات' للفحص، أو انتظر توصيات جديدة تتحقق مع الوقت.")
+        if win_stats.get("avg_risk_reward") is not None:
+            wc5, wc6 = st.columns(2)
+            wc5.metric("⚖️ متوسط المخاطرة/العائد المخطط", f"1 : {win_stats['avg_risk_reward']}")
+            expectancy = win_stats.get("expectancy_r")
+            if expectancy is not None:
+                exp_label = "✅ إيجابي (مربح إحصائياً)" if expectancy > 0 else "⚠️ سلبي (خاسر إحصائياً)"
+                wc6.metric("🧮 التوقع الرياضي (لكل وحدة مخاطرة)", f"{expectancy}R", help=exp_label)
+            st.caption(
+                "التوقع الرياضي (Expectancy) يجمع بين نسبة النجاح ونسبة المخاطرة/العائد بمعادلة واحدة — "
+                "رقم موجب يعني الاستراتيجية مربحة إحصائياً على المدى الطويل حتى لو نسبة النجاح أقل من 50%، "
+                "ورقم سالب يعني العكس حتى لو نسبة النجاح عالية."
+            )
+    else:
+        st.caption("ما فيه صفقات مغلقة بعد — اضغط 'تحديث حالة الصفقات' للفحص، أو انتظر توصيات جديدة تتحقق مع الوقت.")
 
     # ---- دقة درجة التطابق الفعلية (Feedback Loop) ----
     st.divider()
@@ -1704,7 +1696,12 @@ with tab_recommendations:
     st.divider()
     fc1, fc2, fc3 = st.columns([1, 1, 1])
     with fc1:
-        only_buy = st.checkbox("عرض إشارات الدخول فقط (شراء/بيع)", value=False, key="only_buy_recs")
+        sort_choice = st.selectbox(
+            "الترتيب",
+            ["🕐 الأحدث أولاً (موصى به)", "💪 الأقوى إشارة أولاً"],
+            key="sort_choice_recs",
+            help="'الأحدث أولاً' يضمن ظهور أي توصية جديدة بالسجل فوراً بغض النظر عن قوتها.",
+        )
     with fc2:
         status_filter = st.selectbox(
             "تصفية حسب الحالة",
@@ -1712,12 +1709,16 @@ with tab_recommendations:
             key="status_filter_recs",
         )
     with fc3:
-        sort_choice = st.selectbox(
-            "الترتيب",
-            ["🕐 الأحدث أولاً (موصى به)", "💪 الأقوى إشارة أولاً"],
-            key="sort_choice_recs",
-            help="'الأحدث أولاً' يضمن ظهور أي توصية جديدة بالسجل فوراً بغض النظر عن قوتها.",
-        )
+        only_buy = st.checkbox("عرض إشارات الدخول فقط (شراء/بيع)", value=False, key="only_buy_recs")
+
+    with st.expander("⚙️ أدوات صيانة السجل"):
+        st.caption("أدوات لتنظيف البيانات التاريخية — ما تحتاجها إلا نادراً، مو للاستخدام اليومي.")
+        if st.button("🧹 تنظيف التكرارات القديمة"):
+            with st.spinner("جاري فحص السجل التاريخي عن تكرارات..."):
+                cleanup_result = cleanup_duplicate_recommendations(hours=24)
+            st.success(f"✅ تم تصنيف {cleanup_result['marked_duplicates']} توصية كتكرار — استُبعدت من حساب نسبة النجاح.")
+            st.rerun()
+
     order_by = "score" if sort_choice.startswith("💪") else "time"
     recs = get_all_recommendations(limit=500, only_buy_signals=only_buy, order_by=order_by)
 
@@ -1809,9 +1810,9 @@ with tab_alerts:
             st.rerun()
 
     st.divider()
-    check_alerts_col1, check_alerts_col2 = st.columns([1, 3])
-    with check_alerts_col1:
-        check_alerts_now = st.button("🔄 فحص التنبيهات الآن", use_container_width=True)
+    hcol1, hcol2 = st.columns([4, 1.3])
+    hcol1.markdown("##### 🔔 التنبيهات النشطة")
+    check_alerts_now = hcol2.button("🔄 فحص الآن", use_container_width=True)
 
     if check_alerts_now:
         with st.spinner("جاري فحص الأسعار الحالية..."):
@@ -1828,8 +1829,6 @@ with tab_alerts:
         else:
             st.info("لا يوجد تنبيه تحقق حتى الآن.")
 
-    st.divider()
-    st.markdown("##### التنبيهات النشطة")
     active_alerts = get_active_price_alerts()
     if not active_alerts:
         st.caption("ما فيه تنبيهات نشطة حالياً.")
@@ -1877,14 +1876,17 @@ with tab_portfolio:
 
     st.divider()
 
-    if st.button("🔄 تحديث أسعار المحفظة الحية"):
-        with st.spinner("جاري جلب الأسعار الحالية..."):
-            st.session_state["portfolio_pnl"] = calculate_portfolio_pnl()
-
     if "portfolio_pnl" not in st.session_state:
         st.session_state["portfolio_pnl"] = calculate_portfolio_pnl()
 
     pnl_data = st.session_state["portfolio_pnl"]
+
+    hcol1, hcol2 = st.columns([5, 1.3])
+    hcol1.markdown("#### 📊 أداء المحفظة الحي")
+    if hcol2.button("🔄 تحديث الأسعار", use_container_width=True):
+        with st.spinner("جاري جلب الأسعار الحالية..."):
+            st.session_state["portfolio_pnl"] = calculate_portfolio_pnl()
+        st.rerun()
 
     if not pnl_data["positions"]:
         st.info("محفظتك فاضية حالياً — أضف أول صفقة من الفورم أعلاه.")
@@ -1913,7 +1915,7 @@ with tab_portfolio:
                     st.session_state.pop("portfolio_pnl", None)
                     st.rerun()
 
-        st.caption("⚠️ الأسعار تُحدَّث فقط لما تضغط زر 'تحديث أسعار المحفظة الحية' أعلاه، وليست حية تلقائياً بالخلفية.")
+        st.caption("⚠️ الأسعار تُحدَّث فقط لما تضغط زر 'تحديث الأسعار' أعلاه، وليست حية تلقائياً بالخلفية.")
 
 
 # ========================================================================
@@ -1923,10 +1925,16 @@ with tab_earnings:
     st.subheader("📅 تقويم الأرباح")
     st.caption("اعرف بالضبط متى الشركات المهتم فيها بتعلن أرباحها — من أقوى محركات حركة السعر.")
 
-    earnings_symbols_text = st.text_input(
-        "رموز الأسهم (مفصولة بفاصلة)", value="AAPL,NVDA,TSLA,MSFT,AMZN,GOOGL,META,AMD", key="earnings_symbols",
-    )
-    if st.button("📅 اعرض تواريخ الأرباح", type="primary"):
+    ecol1, ecol2 = st.columns([3, 1.3])
+    with ecol1:
+        earnings_symbols_text = st.text_input(
+            "رموز الأسهم (مفصولة بفاصلة)", value="AAPL,NVDA,TSLA,MSFT,AMZN,GOOGL,META,AMD", key="earnings_symbols",
+        )
+    with ecol2:
+        st.write("")
+        show_earnings = st.button("📅 اعرض تواريخ الأرباح", type="primary", use_container_width=True)
+
+    if show_earnings:
         symbols_list = [s.strip().upper() for s in earnings_symbols_text.split(",") if s.strip()][:30]
         with st.spinner("جاري جلب تواريخ الأرباح..."):
             earnings_data = fetch_earnings_calendar(symbols_list)
@@ -1937,8 +1945,10 @@ with tab_earnings:
             st.dataframe(df_earnings, use_container_width=True, hide_index=True)
             st.caption("⚠️ التواريخ تقديرية من ياهو فايننس، وممكن تتغيّر قبل الإعلان الرسمي من الشركة.")
 
-
-
+# ========================================================================
+# التبويب 9: حاسبة إدارة المخاطر وحجم الصفقة
+# ========================================================================
+with tab_risk:
     st.subheader("🎯 حاسبة إدارة المخاطر وتحديد حجم الصفقة")
     st.caption("أدخل بيانات محفظتك ونقاط الصفقة لمعرفة الحجم المناسب والمخاطرة الفعلية بالدولار.")
 
@@ -1951,7 +1961,7 @@ with tab_earnings:
         stop_loss_price = st.number_input("سعر وقف الخسارة ($)", min_value=0.0, value=95.0, step=0.5)
         target_price = st.number_input("سعر الهدف ($) — اختياري", min_value=0.0, value=110.0, step=0.5)
 
-    if st.button("احسب حجم الصفقة", type="primary"):
+    if st.button("احسب حجم الصفقة", type="primary", use_container_width=True):
         result = calculate_position_size(account_balance, risk_percent, entry_price, stop_loss_price, target_price)
         if "error" in result:
             st.error(result["error"])
@@ -1979,8 +1989,13 @@ with tab_watch:
     st.subheader("📋 قائمة المتابعة السريعة")
     st.caption("أدخل عدة رموز أسهم مفصولة بفاصلة لعرض لقطة سريعة عن كل منها.")
 
-    symbols_text = st.text_input("مثال: AAPL, NVDA, TSLA, AMZN", value="AAPL, NVDA, TSLA")
-    if st.button("عرض القائمة"):
+    wcol1, wcol2 = st.columns([3, 1.3])
+    with wcol1:
+        symbols_text = st.text_input("مثال: AAPL, NVDA, TSLA, AMZN", value="AAPL, NVDA, TSLA")
+    with wcol2:
+        st.write("")
+        show_watch = st.button("عرض القائمة", type="primary", use_container_width=True)
+    if show_watch:
         symbols = [s.strip().upper() for s in symbols_text.split(",") if s.strip()]
         rows = []
         with st.spinner("جاري جلب البيانات..."):

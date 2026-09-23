@@ -77,6 +77,8 @@ from utils import (
     calculate_portfolio_pnl,
     cleanup_duplicate_recommendations,
     enforce_atr_stop_floor,
+    get_user_setting,
+    set_user_setting,
 )
 
 load_dotenv()
@@ -1313,15 +1315,28 @@ with tab_monitor:
         "ويرسل تنبيهاً داخل التطبيق وعبر تلغرام (إن فعّلته)، مع ترتيب أقوى التوصيات تلقائياً."
     )
 
+    _current_user = st.session_state.get("username", "system")
+
+    if "enable_monitor" not in st.session_state:
+        st.session_state["enable_monitor"] = get_user_setting(_current_user, "enable_monitor", False)
+    if "enable_auto_ai" not in st.session_state:
+        st.session_state["enable_auto_ai"] = get_user_setting(_current_user, "enable_auto_ai", False)
+    if "watch_scope" not in st.session_state:
+        st.session_state["watch_scope"] = get_user_setting(_current_user, "watch_scope", "أسهم محددة")
+
     mc1, mc2 = st.columns(2)
     with mc1:
-        enable_monitor = st.checkbox("🔄 تفعيل المراقبة التلقائية (كل دقيقة)", value=False, key="enable_monitor")
+        enable_monitor = st.checkbox("🔄 تفعيل المراقبة التلقائية (كل دقيقة)", key="enable_monitor")
     with mc2:
         enable_auto_ai = st.checkbox(
             "🤖 تحليل تلقائي بالذكاء الاصطناعي للأخبار الجديدة القوية",
-            value=False, key="enable_auto_ai",
+            key="enable_auto_ai",
             help="تنبيه: هذا يستهلك رصيد OpenAI تلقائياً كل مرة يُرصد فيها خبر قوي جديد.",
         )
+    set_user_setting(_current_user, "enable_monitor", enable_monitor)
+    set_user_setting(_current_user, "enable_auto_ai", enable_auto_ai)
+    if enable_monitor or enable_auto_ai:
+        st.caption("💾 هالإعداد محفوظ — لو انقطع الاتصال وتجدد، بيرجع تلقائياً لنفس الحالة.")
 
     min_confluence_for_alert = st.slider(
         "🎚️ الحد الأدنى لدرجة التطابق لإرسال تنبيه (تلغرام/ntfy)",
@@ -1335,6 +1350,7 @@ with tab_monitor:
         horizontal=True,
         key="watch_scope",
     )
+    set_user_setting(_current_user, "watch_scope", watch_scope)
 
     if watch_scope == "أسهم محددة":
         if "watch_symbols_input" not in st.session_state:

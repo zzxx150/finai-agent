@@ -2278,3 +2278,226 @@ def set_user_setting(username: str, key: str, value) -> None:
             (username, key, stored, dt.datetime.now().isoformat(timespec="seconds")),
         )
         conn.commit()
+
+
+# ========================================================================
+# التحديث الكبير: تحليلات المحفظة المتقدمة (Equity Curve، الارتباط، المخاطر)
+# ========================================================================
+
+def get_portfolio_analytics() -> Dict:
+    """
+    يبني صورة تحليلية كاملة عن محفظتك الفعلية:
+    - منحنى قيمة المحفظة عبر الزمن (Equity Curve) بإعادة بناء الأسعار التاريخية
+    - أقصى تراجع (Max Drawdown) والتقلب السنوي وSharpe Ratio التقريبي
+    - مصفوفة الارتباط بين أسهمك (هل تتحرك مع بعض أو مستقلة؟)
+    - توزيع القطاعات ودرجة التنويع (Diversification Score)
+    """
+    positions = get_portfolio_positions()
+    if not positions:
+        return {"has_data": False}
+
+    symbols = sorted(set(p["symbol"] for p in positions))
+    earliest_date = min(p["entry_date"] for p in positions)
+
+    try:
+        raw = yf.download(symbols, start=earliest_date, progress=False, auto_adjust=True)
+        hist = raw["Close"] if "Close" in raw else raw
+    except Exception:
+        return {"has_data": False, "error": "تعذر جلب الأسعار التاريخية حالياً."}
+
+    if isinstance(hist, pd.Series):
+        hist = hist.to_frame(symbols[0])
+    hist = hist.ffill().dropna(how="all")
+
+    if hist.empty:
+        return {"has_data": False, "error": "لا توجد بيانات تاريخية كافية."}
+
+    equity_series = pd.Series(0.0, index=hist.index)
+    for pos in positions:
+        sym = pos["symbol"]
+        if sym not in hist.columns:
+            continue
+        entry_dt = pd.to_datetime(pos["entry_date"])
+        mask = hist.index >= entry_dt
+        equity_series.loc[mask] = equity_series.loc[mask] + hist.loc[mask, sym].fillna(0) * pos["quantity"]
+
+    equity_series = equity_series[equity_series > 0]
+    if equity_series.empty:
+        return {"has_data": False, "error": "لا توجد بيانات كافية بعد دخول أول صفقة."}
+
+    daily_returns = equity_series.pct_change().dropna()
+    running_max = equity_series.cummax()
+    drawdown = (equity_series - running_max) / running_max * 100
+    max_drawdown = drawdown.min() if not drawdown.empty else 0
+
+    std = daily_returns.std()
+    volatility_annual = (std * (252 ** 0.5) * 100) if std and pd.notna(std) else 0
+    sharpe = ((daily_returns.mean() / std) * (252 ** 0.5)) if std and pd.notna(std) and std != 0 else 0
+
+    correlation = {}
+    if len(symbols) > 1:
+        returns_matrix = hist[symbols].pct_change().dropna(how="all")
+        corr_df = returns_matrix.corr().round(2)
+        correlation = {"symbols": list(corr_df.columns), "matrix": corr_df.values.tolist()}
+
+    sector_totals: Dict[str, float] = {}
+    total_value = 0.0
+    for pos in positions:
+        snap = fetch_stock_snapshot(pos["symbol"])
+        sector = snap.get("sector") or "غير محدد"
+        current_price = snap.get("current_price") or pos["entry_price"]
+        value = pos["quantity"] * current_price
+        sector_totals[sector] = sector_totals.get(sector, 0) + value
+        total_value += value
+
+    sector_allocation = [
+        {"sector": s, "value": round(v, 2), "pct": round((v / total_value) * 100, 1) if total_value else 0}
+        for s, v in sorted(sector_totals.items(), key=lambda x: -x[1])
+    ]
+
+    largest_pct = max((s["pct"] for s in sector_allocation), default=0)
+    breadth_penalty = 0 if len(symbols) >= 5 else (5 - len(symbols)) * 8
+    diversification_score = round(max(0, 100 - largest_pct - breadth_penalty), 1)
+
+    return {
+        "has_data": True,
+        "equity_curve": [{"date": d.strftime("%Y-%m-%d"), "value": round(float(v), 2)} for d, v in equity_series.items()],
+        "max_drawdown_pct": round(float(max_drawdown), 2) if pd.notna(max_drawdown) else 0,
+        "volatility_annual_pct": round(float(volatility_annual), 2) if pd.notna(volatility_annual) else 0,
+        "sharpe_ratio": round(float(sharpe), 2) if pd.notna(sharpe) else 0,
+        "correlation": correlation,
+        "sector_allocation": sector_allocation,
+        "diversification_score": diversification_score,
+        "largest_position_pct": largest_pct,
+        "symbols": symbols,
+    }
+
+
+def get_win_rate_by_sector() -> List[Dict]:
+    """يحسب نسبة النجاح الفعلية مقسّمة حسب قطاع كل سهم، لمعرفة أي القطاعات تنجح فيها أكثر."""
+    recs = get_all_recommendations(limit=1000)
+    closed = [r for r in recs if r.get("status") in ("hit_target", "hit_stop")]
+    if not closed:
+        return []
+
+    sector_cache: Dict[str, str] = {}
+    stats: Dict[str, Dict[str, int]] = {}
+    for r in closed:
+        sym = r["symbol"]
+        if sym not in sector_cache:
+            snap = fetch_stock_snapshot(sym)
+            sector_cache[sym] = snap.get("sector") or "غير محدد"
+        sector = sector_cache[sym]
+        s = stats.setdefault(sector, {"wins": 0, "total": 0})
+        s["total"] += 1
+        if r["status"] == "hit_target":
+            s["wins"] += 1
+
+    result = [
+        {
+            "sector": sector,
+            "win_rate": round((s["wins"] / s["total"]) * 100, 1) if s["total"] else 0,
+            "total_trades": s["total"],
+        }
+        for sector, s in stats.items()
+    ]
+    return sorted(result, key=lambda x: -x["total_trades"])
+
+
+def get_monthly_performance_stats() -> List[Dict]:
+    """يحسب نسبة النجاح الشهرية على مدار الوقت — هل الأداء يتحسن شهراً بعد شهر أو يتراجع؟"""
+    recs = get_all_recommendations(limit=2000)
+    closed = [r for r in recs if r.get("status") in ("hit_target", "hit_stop")]
+    if not closed:
+        return []
+
+    monthly: Dict[str, Dict[str, int]] = {}
+    for r in closed:
+        created = r.get("created_at") or ""
+        month_key = created[:7] if len(created) >= 7 else "غير معروف"
+        m = monthly.setdefault(month_key, {"wins": 0, "total": 0})
+        m["total"] += 1
+        if r["status"] == "hit_target":
+            m["wins"] += 1
+
+    return [
+        {"month": k, "win_rate": round((v["wins"] / v["total"]) * 100, 1), "total_trades": v["total"]}
+        for k, v in sorted(monthly.items())
+    ]
+
+
+def get_confluence_accuracy_chart_data() -> List[Dict]:
+    """نفس منطق get_confluence_accuracy_stats بس بأرقام خام (بدون % كنص) عشان تُرسم كمخطط."""
+    init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("""
+            SELECT confluence_score, status FROM recommendations
+            WHERE status IN ('hit_target', 'hit_stop') AND confluence_score IS NOT NULL
+        """).fetchall()
+
+    buckets = {"75-95% (قوي)": [], "55-74% (متوسط)": [], "40-54% (ضعيف)": [], "أقل من 40% (سلبي)": []}
+    for row in rows:
+        score = row["confluence_score"]
+        won = 1 if row["status"] == "hit_target" else 0
+        if score >= 75:
+            buckets["75-95% (قوي)"].append(won)
+        elif score >= 55:
+            buckets["55-74% (متوسط)"].append(won)
+        elif score >= 40:
+            buckets["40-54% (ضعيف)"].append(won)
+        else:
+            buckets["أقل من 40% (سلبي)"].append(won)
+
+    return [
+        {"bucket": label, "win_rate": round((sum(outcomes) / len(outcomes)) * 100, 1), "total_trades": len(outcomes)}
+        for label, outcomes in buckets.items() if outcomes
+    ]
+
+
+def calculate_kelly_criterion(win_rate_pct: float, avg_risk_reward: float) -> Dict:
+    """
+    نسبة كيلي (Kelly Criterion) — تقترح أعلى نسبة من رأس المال يُنصح بالمخاطرة
+    فيها بناءً على معدل نجاحك التاريخي ونسبة المخاطرة/العائد المتوسطة، لتعظيم
+    النمو المركب على المدى الطويل. نعرض أيضاً 'نصف كيلي' لأنه الأكثر استخداماً
+    عملياً (يقلل التقلب الحاد اللي تسببه نسبة كيلي الكاملة).
+    """
+    if avg_risk_reward is None or avg_risk_reward <= 0:
+        return {"error": "نسبة المخاطرة/العائد لازم تكون أكبر من صفر لحساب كيلي."}
+    w = win_rate_pct / 100
+    kelly_pct = (w - ((1 - w) / avg_risk_reward)) * 100
+    kelly_pct = max(0.0, kelly_pct)
+    return {
+        "full_kelly_pct": round(kelly_pct, 2),
+        "half_kelly_pct": round(kelly_pct / 2, 2),
+    }
+
+
+def generate_daily_market_brief(api_key: str, headlines: List[str], model: str = "gpt-4o-mini") -> str:
+    """
+    يولّد إحاطة سوق يومية قصيرة (3-4 أسطر) بالعربية بناءً على أبرز عناوين
+    اليوم — ملخص سريع لحالة السوق العامة قبل ما تدخل بالتفاصيل.
+    """
+    if not api_key or OpenAI is None or not headlines:
+        return ""
+    try:
+        client = OpenAI(api_key=api_key)
+        joined = "\n".join(f"- {h}" for h in headlines[:15])
+        resp = client.chat.completions.create(
+            model=model,
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "أنت محلل مالي محترف. لخّص حالة السوق العامة اليوم بالعربية الفصحى بإيجاز "
+                        "شديد (3-4 أسطر بس)، بأسلوب مباشر وعملي لمتداول، بدون مقدمات ولا خاتمة."
+                    ),
+                },
+                {"role": "user", "content": f"أهم عناوين اليوم:\n{joined}\n\nلخّص الاتجاه العام واذكر أبرز نقطتين يستاهل الانتباه لهما اليوم."},
+            ],
+            max_tokens=220,
+            temperature=0.4,
+        )
+        return (resp.choices[0].message.content or "").strip()
+    except Exception:
+        return ""

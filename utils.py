@@ -2226,3 +2226,55 @@ def enforce_atr_stop_floor(analysis: Dict, symbol: str) -> Dict:
         analysis["_stop_widened_by_atr"] = True
 
     return analysis
+
+
+# ----------------------------------------------------------------------
+# 37) تفضيلات المستخدم الدائمة (تنجو من انقطاع الجلسة/الاتصال)
+# ----------------------------------------------------------------------
+
+def init_user_settings_db() -> None:
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_settings (
+                username TEXT,
+                setting_key TEXT,
+                setting_value TEXT,
+                updated_at TEXT,
+                PRIMARY KEY (username, setting_key)
+            )
+        """)
+        conn.commit()
+
+
+def get_user_setting(username: str, key: str, default=None):
+    """
+    يرجع تفضيل محفوظ للمستخدم (مثل: هل المراقبة التلقائية كانت مفعّلة).
+    يُستخدم كقيمة ابتدائية للخانات بدل تشفيرها كـ False دائماً، عشان
+    تنجو من انقطاع اتصال الجلسة (مشكلة معروفة بـ Streamlit عند ترك
+    الصفحة مفتوحة فترة طويلة أو تقفل شاشة الجوال).
+    """
+    init_user_settings_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT setting_value FROM user_settings WHERE username = ? AND setting_key = ?",
+            (username, key),
+        ).fetchone()
+        if row is None:
+            return default
+        val = row[0]
+        if val == "true":
+            return True
+        if val == "false":
+            return False
+        return val
+
+
+def set_user_setting(username: str, key: str, value) -> None:
+    init_user_settings_db()
+    stored = "true" if value is True else "false" if value is False else str(value)
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO user_settings (username, setting_key, setting_value, updated_at) VALUES (?, ?, ?, ?)",
+            (username, key, stored, dt.datetime.now().isoformat(timespec="seconds")),
+        )
+        conn.commit()

@@ -19,6 +19,7 @@ import datetime as dt
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import plotly.graph_objects as go
 import streamlit.components.v1 as components
 from dotenv import load_dotenv
 from streamlit_autorefresh import st_autorefresh
@@ -79,6 +80,12 @@ from utils import (
     enforce_atr_stop_floor,
     get_user_setting,
     set_user_setting,
+    get_portfolio_analytics,
+    get_win_rate_by_sector,
+    get_monthly_performance_stats,
+    get_confluence_accuracy_chart_data,
+    calculate_kelly_criterion,
+    generate_daily_market_brief,
 )
 
 load_dotenv()
@@ -515,6 +522,53 @@ input, textarea, select, .stSelectbox div[data-baseweb="select"] {
     70%  { box-shadow: 0 0 0 8px rgba(52,211,153,0); }
     100% { box-shadow: 0 0 0 0 rgba(52,211,153,0); }
 }
+
+/* ---------- التحديث الكبير: تحسينات تصميم إضافية ---------- */
+
+/* أزرار ثانوية (غير primary) — حدود واضحة بلمسة زجاجية بدل الشكل الافتراضي الباهت */
+.stButton button:not([kind="primary"]), .stDownloadButton button {
+    background: rgba(255,255,255,0.035) !important;
+    border: 1px solid rgba(255,255,255,0.14) !important;
+    color: #EDF1F7 !important;
+}
+.stButton button:not([kind="primary"]):hover, .stDownloadButton button:hover {
+    border-color: rgba(34,211,168,0.55) !important;
+    background: rgba(34,211,168,0.08) !important;
+}
+
+/* حاويات st.container(border=True) — نفس هوية البطاقات الزجاجية بدل الحدود الرمادية الافتراضية */
+[data-testid="stVerticalBlockBorderWrapper"] {
+    border-radius: 16px !important;
+    border-color: rgba(255,255,255,0.09) !important;
+    background: linear-gradient(155deg, rgba(255,255,255,0.025), rgba(255,255,255,0.006));
+}
+
+/* شارات حالة صغيرة (Badges) — تُستخدم بدل النص العادي لعرض حالة سريعة الفهم بصرياً */
+.boosh-badge {
+    display: inline-block; padding: 3px 12px; border-radius: 999px;
+    font-size: 0.78rem; font-weight: 700; letter-spacing: 0.2px;
+}
+.boosh-badge-success { background: rgba(52,211,153,0.14); color: #34D399; border: 1px solid rgba(52,211,153,0.3); }
+.boosh-badge-danger  { background: rgba(231,76,60,0.14); color: #FF6B6B; border: 1px solid rgba(231,76,60,0.3); }
+.boosh-badge-neutral { background: rgba(255,255,255,0.06); color: #A9B2C3; border: 1px solid rgba(255,255,255,0.12); }
+.boosh-badge-info    { background: rgba(79,209,255,0.14); color: #4FD1FF; border: 1px solid rgba(79,209,255,0.3); }
+
+/* عنوان قسم فرعي بلمسة موحّدة (يُستخدم بدل st.markdown('#####') العادي بالأقسام المهمة) */
+.boosh-section-title {
+    font-weight: 800; font-size: 1.02rem; color: #EDF1F7;
+    border-right: 3px solid #4FD1FF; padding-right: 10px; margin: 6px 0 10px 0;
+}
+
+/* تحسين مظهر السلايدر */
+[data-testid="stSlider"] [role="slider"] {
+    background: #22D3A8 !important;
+    box-shadow: 0 0 0 4px rgba(34,211,168,0.18) !important;
+}
+
+/* تحسين مظهر الراديو والـ checkbox */
+[data-testid="stCheckbox"] label, [data-testid="stRadio"] label {
+    font-weight: 500 !important;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -834,6 +888,7 @@ with st.expander("🕐 أوقات التداول الكاملة بالسوق ا�
     tab_search,
     tab_recommendations,
     tab_portfolio,
+    tab_analytics,
     tab_earnings,
     tab_alerts,
     tab_risk,
@@ -846,6 +901,7 @@ with st.expander("🕐 أوقات التداول الكاملة بالسوق ا�
         "🔍 تحليل سهم محدد",
         "📂 سجل التوصيات",
         "💼 محفظتي",
+        "📊 التحليلات والأداء",
         "📅 تقويم الأرباح",
         "🔔 تنبيهات سعرية",
         "🎯 حاسبة المخاطر",
@@ -857,6 +913,32 @@ with st.expander("🕐 أوقات التداول الكاملة بالسوق ا�
 # التبويب 1: لوحة الأخبار اليومية + خريطة الحرارة + فلترة عالية التأثير
 # ========================================================================
 with tab_dashboard:
+    _today_str = dt.date.today().isoformat()
+    if st.session_state.get("daily_brief_date") != _today_str:
+        st.session_state["daily_brief_date"] = _today_str
+        st.session_state["daily_brief_text"] = None
+
+    with st.container(border=True):
+        bcol1, bcol2 = st.columns([5, 1.3])
+        bcol1.markdown("#### 🧭 الإحاطة اليومية للسوق (AI)")
+        gen_brief = bcol2.button("🔄 توليد/تحديث", use_container_width=True, key="gen_daily_brief")
+
+        if gen_brief:
+            if not openai_key or not finnhub_key:
+                st.warning("لازم تدخل مفتاحي Finnhub و OpenAI من الشريط الجانبي أول عشان يُولّد الإحاطة.")
+            else:
+                with st.spinner("جاري تحليل أبرز أخبار اليوم..."):
+                    brief_news = fetch_market_news(finnhub_key, category="general", limit=20)
+                    brief_headlines = [n.get("headline", "") for n in brief_news if n.get("headline")]
+                    st.session_state["daily_brief_text"] = generate_daily_market_brief(openai_key, brief_headlines, model=ai_model)
+
+        if st.session_state.get("daily_brief_text"):
+            st.markdown(st.session_state["daily_brief_text"])
+            st.caption(f"آخر توليد: اليوم ({_today_str}) — بناءً على أبرز 20 خبراً عاماً بالسوق.")
+        else:
+            st.caption("اضغط '🔄 توليد/تحديث' فوق للحصول على ملخص سريع لحالة السوق العامة اليوم قبل ما تنزل للتفاصيل.")
+
+    st.divider()
     col_a, col_b, col_c, col_d = st.columns([2, 1, 1, 1])
     with col_a:
         st.subheader("الأخبار اللحظية للسوق")
@@ -1906,8 +1988,11 @@ with tab_portfolio:
                 pcol2.caption(f"دخول: ${pos['entry_price']}")
                 if pos.get("current_price") is not None:
                     pcol3.caption(f"حالي: ${pos['current_price']:.2f}")
-                    pnl_sign = "🟢" if pos["pnl"] >= 0 else "🔴"
-                    pcol4.markdown(f"{pnl_sign} ${pos['pnl']:,.2f} ({pos['pnl_pct']}%)")
+                    badge_cls = "boosh-badge-success" if pos["pnl"] >= 0 else "boosh-badge-danger"
+                    pcol4.markdown(
+                        f'<span class="boosh-badge {badge_cls}">${pos["pnl"]:,.2f} ({pos["pnl_pct"]}%)</span>',
+                        unsafe_allow_html=True,
+                    )
                 else:
                     pcol3.caption("السعر غير متوفر")
                 if pcol5.button("🗑️", key=f"del_pos_{pos['id']}"):
@@ -1916,6 +2001,104 @@ with tab_portfolio:
                     st.rerun()
 
         st.caption("⚠️ الأسعار تُحدَّث فقط لما تضغط زر 'تحديث الأسعار' أعلاه، وليست حية تلقائياً بالخلفية.")
+
+
+# ========================================================================
+# التبويب الجديد: التحليلات والأداء (Equity Curve، الارتباط، القطاعات، الأداء الشهري)
+# ========================================================================
+with tab_analytics:
+    st.subheader("📊 التحليلات والأداء")
+    st.caption("صورة شاملة عن أداء محفظتك وتوصياتك عبر الزمن — مو بس لقطة لحظية.")
+
+    acol1, acol2 = st.columns([4, 1.3])
+    acol1.markdown("##### 💼 تحليل المحفظة الفعلية")
+    run_portfolio_analytics = acol2.button("🔄 تحليل المحفظة", type="primary", use_container_width=True, key="run_portfolio_analytics")
+
+    if run_portfolio_analytics:
+        with st.spinner("جاري إعادة بناء بيانات المحفظة التاريخية وحساب المخاطر..."):
+            st.session_state["portfolio_analytics"] = get_portfolio_analytics()
+
+    analytics = st.session_state.get("portfolio_analytics")
+
+    if analytics is None:
+        st.info("اضغط '🔄 تحليل المحفظة' فوق لعرض منحنى الأداء، الارتباط، وتوزيع القطاعات (يحتاج صفقات مسجّلة بتبويب 💼 محفظتي).")
+    elif not analytics.get("has_data"):
+        st.info(analytics.get("error", "أضف صفقة أو أكثر بتبويب '💼 محفظتي' أول عشان تظهر التحليلات هنا."))
+    else:
+        rk1, rk2, rk3, rk4 = st.columns(4)
+        rk1.metric("📉 أقصى تراجع (Max Drawdown)", f"{analytics['max_drawdown_pct']}%")
+        rk2.metric("📈 التقلب السنوي (Volatility)", f"{analytics['volatility_annual_pct']}%")
+        rk3.metric("⚖️ Sharpe Ratio (تقريبي)", f"{analytics['sharpe_ratio']}")
+        rk4.metric("🧩 درجة التنويع", f"{analytics['diversification_score']}/100")
+
+        eq = analytics.get("equity_curve") or []
+        if len(eq) > 1:
+            df_eq = pd.DataFrame(eq)
+            fig_eq = px.area(df_eq, x="date", y="value", title="📈 منحنى قيمة المحفظة عبر الزمن (Equity Curve)")
+            fig_eq.update_layout(height=320, margin=dict(l=10, r=10, t=40, b=10), xaxis_title=None, yaxis_title="القيمة ($)")
+            fig_eq.update_traces(line_color="#22D3A8", fillcolor="rgba(34,211,168,0.15)")
+            st.plotly_chart(fig_eq, use_container_width=True)
+
+        acol_sec, acol_corr = st.columns(2)
+        with acol_sec:
+            sector_alloc = analytics.get("sector_allocation") or []
+            if sector_alloc:
+                df_sector = pd.DataFrame(sector_alloc)
+                fig_sector = px.pie(df_sector, names="sector", values="value", title="🧩 توزيع المحفظة حسب القطاع", hole=0.45)
+                fig_sector.update_layout(height=320, margin=dict(l=10, r=10, t=40, b=10))
+                st.plotly_chart(fig_sector, use_container_width=True)
+                if analytics.get("largest_position_pct", 0) > 40:
+                    st.warning(f"⚠️ أكبر مركز يشكّل {analytics['largest_position_pct']}% من محفظتك — تركيز عالي يزيد المخاطرة.")
+
+        with acol_corr:
+            corr = analytics.get("correlation") or {}
+            if corr.get("matrix"):
+                fig_corr = go.Figure(data=go.Heatmap(
+                    z=corr["matrix"], x=corr["symbols"], y=corr["symbols"],
+                    colorscale=[[0, "#1BB894"], [0.5, "#151A24"], [1, "#e74c3c"]],
+                    zmin=-1, zmax=1, text=corr["matrix"], texttemplate="%{text}",
+                ))
+                fig_corr.update_layout(title="🔗 مصفوفة الارتباط بين أسهمك", height=320, margin=dict(l=10, r=10, t=40, b=10))
+                st.plotly_chart(fig_corr, use_container_width=True)
+                st.caption("قيمة قريبة من 1 = الأسهم تتحرك مع بعض (تنويع ضعيف). قريبة من -1 أو 0 = تنويع أفضل.")
+            else:
+                st.caption("مصفوفة الارتباط تحتاج سهمين على الأقل بالمحفظة.")
+
+    st.divider()
+    st.markdown("##### 🎯 أداء توصيات الذكاء الاصطناعي عبر الزمن")
+
+    perf_col1, perf_col2 = st.columns(2)
+    with perf_col1:
+        sector_perf = get_win_rate_by_sector()
+        if sector_perf:
+            df_sp = pd.DataFrame(sector_perf)
+            fig_sp = px.bar(df_sp, x="sector", y="win_rate", text="total_trades", title="نسبة النجاح حسب القطاع")
+            fig_sp.update_traces(marker_color="#4FD1FF", texttemplate="%{text} صفقة", textposition="outside")
+            fig_sp.update_layout(height=300, margin=dict(l=10, r=10, t=40, b=10), yaxis_title="نسبة النجاح %", xaxis_title=None)
+            st.plotly_chart(fig_sp, use_container_width=True)
+        else:
+            st.caption("لا توجد صفقات مغلقة كافية بعد لعرض الأداء حسب القطاع.")
+
+    with perf_col2:
+        monthly_perf = get_monthly_performance_stats()
+        if monthly_perf:
+            df_mp = pd.DataFrame(monthly_perf)
+            fig_mp = px.line(df_mp, x="month", y="win_rate", markers=True, title="اتجاه نسبة النجاح الشهرية")
+            fig_mp.update_traces(line_color="#A78BFA")
+            fig_mp.update_layout(height=300, margin=dict(l=10, r=10, t=40, b=10), yaxis_title="نسبة النجاح %", xaxis_title=None)
+            st.plotly_chart(fig_mp, use_container_width=True)
+        else:
+            st.caption("لا توجد بيانات شهرية كافية بعد.")
+
+    confluence_chart_data = get_confluence_accuracy_chart_data()
+    if confluence_chart_data:
+        df_cc = pd.DataFrame(confluence_chart_data)
+        fig_cc = px.bar(df_cc, x="bucket", y="win_rate", text="total_trades", title="🔁 دقة درجة التطابق (مقارنة بالنتائج الفعلية)")
+        fig_cc.update_traces(marker_color="#22D3A8", texttemplate="%{text} صفقة", textposition="outside")
+        fig_cc.update_layout(height=300, margin=dict(l=10, r=10, t=40, b=10), yaxis_title="نسبة النجاح %", xaxis_title=None)
+        st.plotly_chart(fig_cc, use_container_width=True)
+    else:
+        st.caption("لا توجد بيانات كافية بعد لعرض دقة درجة التطابق كمخطط.")
 
 
 # ========================================================================
@@ -1981,6 +2164,26 @@ with tab_risk:
                 st.warning("⚠️ نسبة المخاطرة إلى العائد أقل من 1:1.5 — يُفضّل عادة صفقات بنسبة 1:2 أو أعلى.")
             elif result.get("risk_reward_ratio"):
                 st.success("✅ نسبة المخاطرة إلى العائد جيدة نسبياً.")
+
+    st.divider()
+    st.markdown("##### 🧮 نسبة كيلي (Kelly Criterion) — بناءً على أدائك الفعلي")
+    st.caption("يحسب أعلى نسبة من رأس مالك يُنصح بالمخاطرة فيها لكل صفقة، بناءً على نسبة نجاحك ومتوسط المخاطرة/العائد التاريخيين الفعليين (من سجل التوصيات المغلقة).")
+
+    kelly_win_stats = get_win_rate_stats()
+    if kelly_win_stats["total_closed"] < 5 or not kelly_win_stats.get("avg_risk_reward"):
+        st.info("يحتاج على الأقل 5 صفقات مغلقة بسجل التوصيات (وبيانات مخاطرة/عائد محفوظة) عشان يُحسب بدقة معقولة.")
+    else:
+        kelly_result = calculate_kelly_criterion(kelly_win_stats["win_rate"], kelly_win_stats["avg_risk_reward"])
+        if "error" in kelly_result:
+            st.warning(kelly_result["error"])
+        else:
+            kc1, kc2 = st.columns(2)
+            kc1.metric("كيلي الكاملة (نظرياً)", f"{kelly_result['full_kelly_pct']}%")
+            kc2.metric("نصف كيلي (موصى به عملياً)", f"{kelly_result['half_kelly_pct']}%")
+            st.caption(
+                f"محسوبة من نسبة نجاح {kelly_win_stats['win_rate']}% ومتوسط مخاطرة/عائد 1:{kelly_win_stats['avg_risk_reward']}. "
+                "معظم المتداولين المحترفين يستخدمون 'نصف كيلي' فقط لأن كيلي الكاملة تسبب تقلبات حادة بقيمة المحفظة رغم إنها 'الأمثل رياضياً' على المدى الطويل."
+            )
 
 # ========================================================================
 # التبويب 4: قائمة متابعة سريعة (متعدد الأسهم دفعة واحدة)

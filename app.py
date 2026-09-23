@@ -592,7 +592,7 @@ st.markdown(
 # ----------------------------------------------------------------------
 # شريط الأسعار المتحرك (Ticker) — يظهر بأعلى كل صفحات التطبيق
 # ----------------------------------------------------------------------
-st_autorefresh(interval=60_000, key="header_ticker_autorefresh")
+st_autorefresh(interval=180_000, key="header_ticker_autorefresh")
 
 if "ticker_data" not in st.session_state or "ticker_fetched_at" not in st.session_state or \
    (dt.datetime.now() - st.session_state.get("ticker_fetched_at", dt.datetime.min)).total_seconds() > 60:
@@ -1419,6 +1419,12 @@ with tab_monitor:
     set_user_setting(_current_user, "enable_auto_ai", enable_auto_ai)
     if enable_monitor or enable_auto_ai:
         st.caption("💾 هالإعداد محفوظ — لو انقطع الاتصال وتجدد، بيرجع تلقائياً لنفس الحالة.")
+
+    with st.expander("🔍 تشخيص (لو الخانات ترجع تطفى بعد فترة، افتح هذا واشوف وش يقول)"):
+        _db_monitor = get_user_setting(_current_user, "enable_monitor", False)
+        _db_auto_ai = get_user_setting(_current_user, "enable_auto_ai", False)
+        st.caption(f"القيمة المحفوظة فعلياً بقاعدة البيانات الآن (مو الشاشة): المراقبة = {'✅ مفعّلة' if _db_monitor else '❌ مطفية'} | التحليل التلقائي = {'✅ مفعّل' if _db_auto_ai else '❌ مطفي'}")
+        st.caption("لو هذا يقول 'مفعّلة' بس الخانة اللي فوق تظهر مطفية — المشكلة بعرض الشاشة بس (سهل الحل). لو يقول 'مطفية' فعلاً — يبي فحص أعمق ليش ما انحفظت أصلاً. قول لي وش يظهر هنا المرة الجاية.")
 
     min_confluence_for_alert = st.slider(
         "🎚️ الحد الأدنى لدرجة التطابق لإرسال تنبيه (تلغرام/ntfy)",

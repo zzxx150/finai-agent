@@ -2065,40 +2065,51 @@ with tab_analytics:
                 st.caption("مصفوفة الارتباط تحتاج سهمين على الأقل بالمحفظة.")
 
     st.divider()
-    st.markdown("##### 🎯 أداء توصيات الذكاء الاصطناعي عبر الزمن")
+    perf_hcol1, perf_hcol2 = st.columns([4, 1.3])
+    perf_hcol1.markdown("##### 🎯 أداء توصيات الذكاء الاصطناعي عبر الزمن")
+    run_perf_analytics = perf_hcol2.button("🔄 تحديث تحليل الأداء", use_container_width=True, key="run_perf_analytics")
 
-    perf_col1, perf_col2 = st.columns(2)
-    with perf_col1:
-        sector_perf = get_win_rate_by_sector()
-        if sector_perf:
-            df_sp = pd.DataFrame(sector_perf)
-            fig_sp = px.bar(df_sp, x="sector", y="win_rate", text="total_trades", title="نسبة النجاح حسب القطاع")
-            fig_sp.update_traces(marker_color="#4FD1FF", texttemplate="%{text} صفقة", textposition="outside")
-            fig_sp.update_layout(height=300, margin=dict(l=10, r=10, t=40, b=10), yaxis_title="نسبة النجاح %", xaxis_title=None)
-            st.plotly_chart(fig_sp, use_container_width=True)
-        else:
-            st.caption("لا توجد صفقات مغلقة كافية بعد لعرض الأداء حسب القطاع.")
+    if run_perf_analytics:
+        with st.spinner("جاري تحليل الأداء حسب القطاع والوقت (قد يأخذ لحظات)..."):
+            st.session_state["perf_sector"] = get_win_rate_by_sector()
+            st.session_state["perf_monthly"] = get_monthly_performance_stats()
+            st.session_state["perf_confluence"] = get_confluence_accuracy_chart_data()
 
-    with perf_col2:
-        monthly_perf = get_monthly_performance_stats()
-        if monthly_perf:
-            df_mp = pd.DataFrame(monthly_perf)
-            fig_mp = px.line(df_mp, x="month", y="win_rate", markers=True, title="اتجاه نسبة النجاح الشهرية")
-            fig_mp.update_traces(line_color="#A78BFA")
-            fig_mp.update_layout(height=300, margin=dict(l=10, r=10, t=40, b=10), yaxis_title="نسبة النجاح %", xaxis_title=None)
-            st.plotly_chart(fig_mp, use_container_width=True)
-        else:
-            st.caption("لا توجد بيانات شهرية كافية بعد.")
-
-    confluence_chart_data = get_confluence_accuracy_chart_data()
-    if confluence_chart_data:
-        df_cc = pd.DataFrame(confluence_chart_data)
-        fig_cc = px.bar(df_cc, x="bucket", y="win_rate", text="total_trades", title="🔁 دقة درجة التطابق (مقارنة بالنتائج الفعلية)")
-        fig_cc.update_traces(marker_color="#22D3A8", texttemplate="%{text} صفقة", textposition="outside")
-        fig_cc.update_layout(height=300, margin=dict(l=10, r=10, t=40, b=10), yaxis_title="نسبة النجاح %", xaxis_title=None)
-        st.plotly_chart(fig_cc, use_container_width=True)
+    if "perf_sector" not in st.session_state:
+        st.info("اضغط '🔄 تحديث تحليل الأداء' فوق لعرض الأداء حسب القطاع والاتجاه الشهري (يجلب بيانات لكل سهم، فما يشتغل تلقائياً بكل تحديث للصفحة عشان ما يبطّئ الموقع).")
     else:
-        st.caption("لا توجد بيانات كافية بعد لعرض دقة درجة التطابق كمخطط.")
+        perf_col1, perf_col2 = st.columns(2)
+        with perf_col1:
+            sector_perf = st.session_state.get("perf_sector") or []
+            if sector_perf:
+                df_sp = pd.DataFrame(sector_perf)
+                fig_sp = px.bar(df_sp, x="sector", y="win_rate", text="total_trades", title="نسبة النجاح حسب القطاع")
+                fig_sp.update_traces(marker_color="#4FD1FF", texttemplate="%{text} صفقة", textposition="outside")
+                fig_sp.update_layout(height=300, margin=dict(l=10, r=10, t=40, b=10), yaxis_title="نسبة النجاح %", xaxis_title=None)
+                st.plotly_chart(fig_sp, use_container_width=True)
+            else:
+                st.caption("لا توجد صفقات مغلقة كافية بعد لعرض الأداء حسب القطاع.")
+
+        with perf_col2:
+            monthly_perf = st.session_state.get("perf_monthly") or []
+            if monthly_perf:
+                df_mp = pd.DataFrame(monthly_perf)
+                fig_mp = px.line(df_mp, x="month", y="win_rate", markers=True, title="اتجاه نسبة النجاح الشهرية")
+                fig_mp.update_traces(line_color="#A78BFA")
+                fig_mp.update_layout(height=300, margin=dict(l=10, r=10, t=40, b=10), yaxis_title="نسبة النجاح %", xaxis_title=None)
+                st.plotly_chart(fig_mp, use_container_width=True)
+            else:
+                st.caption("لا توجد بيانات شهرية كافية بعد.")
+
+        confluence_chart_data = st.session_state.get("perf_confluence") or []
+        if confluence_chart_data:
+            df_cc = pd.DataFrame(confluence_chart_data)
+            fig_cc = px.bar(df_cc, x="bucket", y="win_rate", text="total_trades", title="🔁 دقة درجة التطابق (مقارنة بالنتائج الفعلية)")
+            fig_cc.update_traces(marker_color="#22D3A8", texttemplate="%{text} صفقة", textposition="outside")
+            fig_cc.update_layout(height=300, margin=dict(l=10, r=10, t=40, b=10), yaxis_title="نسبة النجاح %", xaxis_title=None)
+            st.plotly_chart(fig_cc, use_container_width=True)
+        else:
+            st.caption("لا توجد بيانات كافية بعد لعرض دقة درجة التطابق كمخطط.")
 
 
 # ========================================================================

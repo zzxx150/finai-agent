@@ -196,18 +196,18 @@ html, body {
     background-color: #06080D !important;
 }
 #bg-video {
-    position: fixed;
+    position: fixed !important;
     top: 0; left: 0;
     width: 100%; height: 100%;
     object-fit: cover;
     z-index: -100;
-    opacity: 0.35;
+    opacity: 0.7;
 }
 #bg-video-overlay {
-    position: fixed;
+    position: fixed !important;
     top: 0; left: 0;
     width: 100%; height: 100%;
-    background: linear-gradient(160deg, rgba(6,8,13,0.75) 0%, rgba(10,14,22,0.85) 45%, rgba(13,18,32,0.9) 100%);
+    background: linear-gradient(160deg, rgba(6,8,13,0.35) 0%, rgba(10,14,22,0.45) 45%, rgba(13,18,32,0.55) 100%);
     z-index: -90;
 }
 /* ---------- كرات ضوء متوهجة متحركة (Glow Orbs) — حيوية قوية بالخلفية ---------- */

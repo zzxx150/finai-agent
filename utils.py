@@ -14,6 +14,7 @@ utils.py
 import os
 import json
 import time
+import math
 import hashlib
 import sqlite3
 import datetime as dt
@@ -196,6 +197,7 @@ AI_SYSTEM_PROMPT = """أنت محلل مالي محترف متخصص في تحل
     "stop_loss_note": "ملاحظة موجزة عن منطق وقف الخسارة (مثلاً تحت مستوى الدعم)",
     "target_note": "ملاحظة موجزة عن الهدف المحتمل ومنطقه (مثلاً عند مستوى المقاومة)",
     "estimated_duration": "تقدير تقريبي جداً لمدة الصفقة حتى الوصول للهدف أو الخروج، اختر واحداً: 'قصيرة (خلال نفس يوم التداول)' أو 'قصيرة-متوسطة (1-3 أيام)' أو 'متوسطة (أسبوع تقريباً)' أو 'طويلة (أسابيع أو أكثر)'. هذا تقدير استرشادي فقط وليس وعداً بزمن دقيق",
+    "holding_period_category": "صنّف أفق الاحتفاظ المتوقع بدقة بناءً على طبيعة المحفّز (الخبر) نفسه وليس فقط المسافة السعرية: هل هذا خبر سيتفاعل معه السوق خلال دقائق ثم يهدأ (مضاربة/شائعة/حركة سعر مفاجئة بدون أساس قوي)، أو خبر يحتاج الجلسة كاملة ليتفاعل السوق معه بالكامل (نتائج أرباح، بيان رسمي مهم)، أو خبر استراتيجي يحتاج أيام ليتفاعل السعر معه تدريجياً (استحواذ، شراكة كبرى، تغيير استراتيجي)؟ اختر حصراً واحداً من: 'scalp' (دقائق إلى ساعتين) أو 'intraday' (حتى نهاية جلسة اليوم) أو 'swing' (يومين إلى 5 أيام عمل)",
     "exit_condition": "متى يجب الخروج من الصفقة (شرط واضح)"
   },
   "risk_warning": "تحذير مخاطرة قصير"
@@ -535,6 +537,16 @@ def init_db() -> None:
             conn.execute("ALTER TABLE recommendations ADD COLUMN status TEXT")
         if "confluence_score" not in existing_cols:
             conn.execute("ALTER TABLE recommendations ADD COLUMN confluence_score REAL")
+        if "target_price_2" not in existing_cols:
+            conn.execute("ALTER TABLE recommendations ADD COLUMN target_price_2 REAL")
+        if "tp1_hit" not in existing_cols:
+            conn.execute("ALTER TABLE recommendations ADD COLUMN tp1_hit INTEGER DEFAULT 0")
+        if "holding_period" not in existing_cols:
+            conn.execute("ALTER TABLE recommendations ADD COLUMN holding_period TEXT")
+        if "expires_at" not in existing_cols:
+            conn.execute("ALTER TABLE recommendations ADD COLUMN expires_at TEXT")
+        if "validation_notes" not in existing_cols:
+            conn.execute("ALTER TABLE recommendations ADD COLUMN validation_notes TEXT")
         conn.commit()
 
 
@@ -568,7 +580,11 @@ def has_recent_open_recommendation(symbol: str, hours: int = 24) -> bool:
     return row[0] > 0
 
 
-def save_recommendation(symbol: str, headline: str, analysis: Dict, created_by: str = "system", confluence_score: Optional[float] = None) -> None:
+def save_recommendation(
+    symbol: str, headline: str, analysis: Dict, created_by: str = "system", confluence_score: Optional[float] = None,
+    target_price_2: Optional[float] = None, holding_period: Optional[str] = None,
+    expires_at: Optional[str] = None, validation_notes: Optional[str] = None,
+) -> None:
     """يحفظ نتيجة تحليل الذكاء الاصطناعي كتوصية جديدة في قاعدة البيانات."""
     init_db()
     plan = analysis.get("trade_plan", {})
@@ -579,8 +595,9 @@ def save_recommendation(symbol: str, headline: str, analysis: Dict, created_by: 
             (symbol, headline, sentiment, impact_level, confidence, is_likely_official,
              action, entry_price, stop_loss_price, target_price,
              entry_note, stop_loss_note, target_note, estimated_duration,
-             exit_condition, score, created_at, created_by, confluence_score)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+             exit_condition, score, created_at, created_by, confluence_score,
+             target_price_2, holding_period, expires_at, validation_notes)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, (
             symbol,
             headline,
@@ -601,6 +618,10 @@ def save_recommendation(symbol: str, headline: str, analysis: Dict, created_by: 
             dt.datetime.now().isoformat(timespec="seconds"),
             created_by,
             confluence_score,
+            target_price_2,
+            holding_period,
+            expires_at,
+            validation_notes,
         ))
         conn.commit()
 
@@ -1027,14 +1048,24 @@ def update_recommendation_status(rec_id: int, status: str) -> None:
         conn.commit()
 
 
+def mark_tp1_hit(rec_id: int) -> None:
+    """يسجّل إن الهدف الجزئي الأول (TP1) تحقق — الصفقة تبقى مفتوحة لباقي الكمية لين الهدف الكامل أو الوقف."""
+    init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("UPDATE recommendations SET tp1_hit = 1 WHERE id = ?", (rec_id,))
+        conn.commit()
+
+
 def check_and_update_open_recommendations() -> Dict:
     """
     يفحص كل التوصيات المفتوحة (status فارغ) اللي فيها أسعار دخول/وقف/هدف رقمية،
     يقارنها بالسعر الحالي الفعلي، ويحدّث حالتها تلقائياً (تحقق الهدف / ضرب وقف
-    الخسارة / لسا مفتوحة). يرجع ملخص بعدد ما تحدّث.
+    الخسارة / لسا مفتوحة) — بالإضافة إلى فحص الهدف الجزئي الأول (TP1) وفحص
+    الإلغاء الزمني (Expiry) لو تجاوزت الصفقة أقصى مدة متوقعة وهي لسا جانبية.
+    يرجع ملخص بعدد ما تحدّث.
     """
     init_db()
-    updated = {"hit_target": 0, "hit_stop": 0, "still_open": 0, "checked": 0}
+    updated = {"hit_target": 0, "hit_stop": 0, "still_open": 0, "checked": 0, "hit_tp1": 0, "expired": 0}
     with sqlite3.connect(DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute("""
@@ -1043,6 +1074,7 @@ def check_and_update_open_recommendations() -> Dict:
             AND entry_price IS NOT NULL AND stop_loss_price IS NOT NULL AND target_price IS NOT NULL
         """).fetchall()
 
+    now = dt.datetime.now()
     for row in rows:
         updated["checked"] += 1
         snap = fetch_stock_snapshot(row["symbol"])
@@ -1066,8 +1098,26 @@ def check_and_update_open_recommendations() -> Dict:
         if new_status:
             update_recommendation_status(row["id"], new_status)
             updated[new_status] += 1
-        else:
-            updated["still_open"] += 1
+            continue
+
+        tp1 = row["target_price_2"]
+        if tp1 and not row["tp1_hit"]:
+            tp1_reached = (current_price <= tp1) if is_short else (current_price >= tp1)
+            if tp1_reached:
+                mark_tp1_hit(row["id"])
+                updated["hit_tp1"] += 1
+
+        expires_at = row["expires_at"]
+        if expires_at:
+            try:
+                if now > dt.datetime.fromisoformat(expires_at):
+                    update_recommendation_status(row["id"], "expired")
+                    updated["expired"] += 1
+                    continue
+            except ValueError:
+                pass
+
+        updated["still_open"] += 1
 
     return updated
 
@@ -1109,10 +1159,25 @@ def get_win_rate_stats() -> Dict:
         win_prob = win_rate / 100
         expectancy = round((win_prob * avg_rr) - (1 - win_prob), 2)
 
+    # فاصل ثقة ويلسون (Wilson Score Interval) لنسبة النجاح — يجاوب سؤال
+    # مهم لمصداقية الرقم: هل 52.9% مثلاً رقم موثوق إحصائياً، أو ممكن يكون
+    # صدفة بسبب عيّنة صغيرة وتتغيّر بسهولة مع أول كم صفقة جديدة؟
+    ci_low, ci_high = None, None
+    if total_closed > 0:
+        z = 1.96  # مستوى ثقة 95%
+        p_hat = hits / total_closed
+        denom = 1 + (z ** 2) / total_closed
+        center = (p_hat + (z ** 2) / (2 * total_closed)) / denom
+        margin = (z * math.sqrt((p_hat * (1 - p_hat) / total_closed) + (z ** 2) / (4 * total_closed ** 2))) / denom
+        ci_low = round(max(0.0, center - margin) * 100, 1)
+        ci_high = round(min(1.0, center + margin) * 100, 1)
+
     return {
         "hit_target": hits, "hit_stop": stops, "still_open": open_count,
         "total_closed": total_closed, "win_rate": win_rate,
         "avg_risk_reward": avg_rr, "expectancy_r": expectancy,
+        "win_rate_ci_low": ci_low, "win_rate_ci_high": ci_high,
+        "is_small_sample": total_closed < 30,
     }
 
 
@@ -2501,3 +2566,310 @@ def generate_daily_market_brief(api_key: str, headlines: List[str], model: str =
         return (resp.choices[0].message.content or "").strip()
     except Exception:
         return ""
+
+
+# ========================================================================
+# ميزات المصداقية: مقارنة بمؤشر السوق، وتوثيق آخر فحص تلقائي للنتائج
+# ========================================================================
+
+def get_benchmark_comparison() -> Dict:
+    """
+    يقارن أداء توصيات النظام (متوسط عائد الصفقة المغلقة بوحدة R) بأداء
+    مؤشر S&P 500 (ETF: SPY) بشراء واحتفاظ (Buy & Hold) بنفس الفترة الزمنية
+    بالضبط — عشان تعرف هل الإشارات فعلاً تضيف قيمة حقيقية، أو النتيجة
+    الإيجابية بس لأن السوق عموماً كان طالع بهالفترة (نفس أضعف اختبار
+    مصداقية تسأله عن أي استراتيجية تداول).
+    """
+    recs = get_all_recommendations(limit=3000)
+    closed = [r for r in recs if r.get("status") in ("hit_target", "hit_stop")]
+    if len(closed) < 5:
+        return {"has_data": False, "reason": "يحتاج 5 صفقات مغلقة على الأقل للمقارنة."}
+
+    dates = [r.get("created_at") for r in closed if r.get("created_at")]
+    if not dates:
+        return {"has_data": False, "reason": "لا توجد تواريخ كافية بالسجل."}
+    start_date = min(dates)[:10]
+
+    try:
+        spy_hist = yf.download("SPY", start=start_date, progress=False, auto_adjust=True)["Close"]
+    except Exception:
+        return {"has_data": False, "reason": "تعذر جلب بيانات المؤشر المرجعي حالياً."}
+
+    if spy_hist.empty or len(spy_hist) < 2:
+        return {"has_data": False, "reason": "بيانات المؤشر المرجعي غير كافية."}
+
+    spy_start = float(spy_hist.iloc[0])
+    spy_end = float(spy_hist.iloc[-1])
+    spy_return_pct = round(((spy_end / spy_start) - 1) * 100, 2)
+
+    r_values = []
+    for r in closed:
+        entry, stop = r.get("entry_price"), r.get("stop_loss_price")
+        target = r.get("target_price")
+        if entry is None or stop is None or target is None:
+            continue
+        risk = abs(entry - stop)
+        reward = abs(target - entry)
+        if risk <= 0:
+            continue
+        rr = reward / risk
+        r_values.append(rr if r["status"] == "hit_target" else -1.0)
+
+    avg_r_multiple = round(sum(r_values) / len(r_values), 2) if r_values else None
+
+    return {
+        "has_data": True,
+        "period_start": start_date,
+        "spy_return_pct": spy_return_pct,
+        "avg_r_multiple": avg_r_multiple,
+        "total_closed_trades": len(closed),
+        "sample_used_for_r": len(r_values),
+    }
+
+
+def record_last_auto_check(source: str = "system") -> None:
+    """يسجّل وقت آخر مرة تحقق فيها النظام تلقائياً من حالة الصفقات المفتوحة — للشفافية."""
+    set_user_setting("_global", "last_auto_check_time", dt.datetime.now().isoformat(timespec="seconds"))
+    set_user_setting("_global", "last_auto_check_source", source)
+
+
+def get_last_auto_check() -> Dict:
+    """يرجّع آخر وقت ومصدر تحقّق آلي من نتائج الصفقات — يُعرض للمستخدم كدليل شفافية."""
+    ts = get_user_setting("_global", "last_auto_check_time", None)
+    source = get_user_setting("_global", "last_auto_check_source", None)
+    return {"timestamp": ts, "source": source}
+
+
+# ========================================================================
+# طبقة التحقق من موثوقية الإشارة (Signal Reliability & Validation)
+#
+# ⚠️ ملاحظتان صريحتان قبل ما تعتمد على هذي الطبقة بالكامل:
+# 1) ما فيه فحص فعلي لتدفق السيولة المؤسسية أو صفقات الـ Dark Pool — هذا
+#    النوع من البيانات مو متاح عبر مزوّدي البيانات المجانيين المستخدمين
+#    بالمنصة (Finnhub/yfinance)، ويحتاج اشتراك مدفوع بمزوّد متخصص (مثل
+#    FlowAlgo أو Unusual Whales). حاولنا نعوّض بجزء منه بفحص الحجم فقط.
+# 2) فحص "التوافق عبر الأطر الزمنية" هنا مبسّط لإطار يومي واحد (السهم
+#    مقابل متوسطه 50 يوم) وليس تحليل حقيقي متعدد الأطر (5 دقائق/15 دقيقة)
+#    — إضافة تحليل داخل اليوم (Intraday) الحقيقي يحتاج طلبات بيانات إضافية
+#    لكل توصية وتستاهل جولة منفصلة لو احتجتها لاحقاً.
+# ========================================================================
+
+TRUSTED_NEWS_SOURCES = {
+    "reuters": 1.0, "bloomberg": 1.0, "sec": 1.0, "sec filings": 1.0,
+    "associated press": 0.95, "ap news": 0.95, "wall street journal": 0.95, "wsj": 0.95,
+    "cnbc": 0.85, "marketwatch": 0.8,
+    "yahoo finance": 0.65, "yahoo": 0.65,
+    "seeking alpha": 0.55, "benzinga": 0.55, "zacks": 0.55,
+}
+
+
+def score_news_source_trust(source: str) -> Dict:
+    """يعطي وزن موثوقية لمصدر الخبر — وكالات رسمية (رويترز/بلومبيرغ/SEC) توزن أعلى من مواقع عامة."""
+    if not source:
+        return {"trust_score": 0.5, "trust_label": "غير معروف", "is_trusted_agency": False}
+    key = source.strip().lower()
+    for name, weight in TRUSTED_NEWS_SOURCES.items():
+        if name in key:
+            label = "عالية" if weight >= 0.9 else "متوسطة" if weight >= 0.7 else "منخفضة"
+            return {"trust_score": weight, "trust_label": label, "is_trusted_agency": weight >= 0.9}
+    return {"trust_score": 0.5, "trust_label": "غير مؤكدة", "is_trusted_agency": False}
+
+
+def check_volume_confirmation(symbol: str, min_ratio_pct: float = 30.0) -> Dict:
+    """يتأكد إن حجم التداول اللحظي أعلى من متوسطه اليومي (20 يوم) بنسبة كافية قبل الاعتماد على خبر بدون سيولة حقيقية خلفه."""
+    try:
+        hist = yf.Ticker(symbol).history(period="1mo")
+        if hist.empty or len(hist) < 5:
+            return {"confirmed": None, "reason": "بيانات حجم غير كافية."}
+        window = hist["Volume"].iloc[:-1]
+        avg_volume_20d = float(window.iloc[-20:].mean()) if len(window) >= 20 else float(window.mean())
+        current_volume = float(hist["Volume"].iloc[-1])
+        if avg_volume_20d <= 0:
+            return {"confirmed": None, "reason": "لا يوجد متوسط حجم موثوق."}
+        ratio_pct = round(((current_volume / avg_volume_20d) - 1) * 100, 1)
+        return {
+            "confirmed": ratio_pct >= min_ratio_pct,
+            "ratio_pct": ratio_pct,
+            "current_volume": int(current_volume),
+            "avg_volume_20d": int(avg_volume_20d),
+        }
+    except Exception as e:
+        return {"confirmed": None, "reason": f"تعذر جلب بيانات الحجم: {e}"}
+
+
+_market_trend_cache = {"data": None, "fetched_at": None}
+
+
+def get_market_trend_bias() -> Dict:
+    """
+    يصنّف اتجاه السوق العام حالياً (S&P 500 مقابل متوسطه 50 يوم) — لرفع معايير
+    توصيات الشراء لو السوق بترند هابط حاد. النتيجة مخزّنة مؤقتاً 15 دقيقة.
+    """
+    now = dt.datetime.now()
+    if _market_trend_cache["data"] and _market_trend_cache["fetched_at"] and \
+       (now - _market_trend_cache["fetched_at"]).total_seconds() < 900:
+        return _market_trend_cache["data"]
+
+    try:
+        hist = yf.Ticker("SPY").history(period="3mo")
+        if hist.empty or len(hist) < 50:
+            result = {"trend": "غير معروف", "error": "بيانات غير كافية."}
+        else:
+            close = hist["Close"]
+            sma50 = float(close.rolling(window=50).mean().iloc[-1])
+            current = float(close.iloc[-1])
+            change_pct = round(((current / sma50) - 1) * 100, 2)
+            trend = "صاعد" if change_pct > 1.5 else "هابط" if change_pct < -1.5 else "متذبذب"
+            result = {"trend": trend, "change_from_sma50_pct": change_pct, "current_price": round(current, 2)}
+    except Exception as e:
+        result = {"trend": "غير معروف", "error": str(e)}
+
+    _market_trend_cache["data"] = result
+    _market_trend_cache["fetched_at"] = now
+    return result
+
+
+def get_stock_daily_trend(symbol: str) -> Dict:
+    """يصنّف الاتجاه اليومي العام للسهم نفسه (فوق/تحت متوسطه المتحرك 50 يوم) — تجنّب التوصية عكس اتجاه السهم العام."""
+    try:
+        hist = yf.Ticker(symbol).history(period="3mo")
+        if hist.empty or len(hist) < 50:
+            return {"trend": "غير معروف"}
+        close = hist["Close"]
+        sma50 = float(close.rolling(window=50).mean().iloc[-1])
+        current = float(close.iloc[-1])
+        change_pct = round(((current / sma50) - 1) * 100, 2)
+        trend = "صاعد" if change_pct > 1 else "هابط" if change_pct < -1 else "متذبذب"
+        return {"trend": trend, "change_from_sma50_pct": change_pct}
+    except Exception as e:
+        return {"trend": "غير معروف", "error": str(e)}
+
+
+def check_earnings_blackout(symbol: str, blackout_hours: float = 72.0) -> Dict:
+    """يحظر توصية جديدة لو موعد إعلان الأرباح خلال الفترة المحددة (افتراضياً 72 ساعة) — تجنّب مخاطرة فجوات الأرباح السعرية."""
+    try:
+        calendar = fetch_earnings_calendar([symbol])
+        if not calendar:
+            return {"blackout": False, "earnings_date": None}
+        earnings_date_str = calendar[0]["earnings_date"]
+        earnings_date = dt.datetime.strptime(earnings_date_str, "%Y-%m-%d")
+        hours_until = (earnings_date - dt.datetime.now()).total_seconds() / 3600
+        return {
+            "blackout": 0 <= hours_until <= blackout_hours,
+            "earnings_date": earnings_date_str,
+            "hours_until": round(hours_until, 1),
+        }
+    except Exception:
+        return {"blackout": False, "earnings_date": None}
+
+
+def check_liquidity_quality(symbol: str, min_market_cap: float = 300_000_000, max_spread_pct: float = 1.5) -> Dict:
+    """يستبعد الأسهم صغيرة القيمة السوقية جداً (Penny Stocks) أو ذات فارق سعر عرض/طلب واسع — النوعين يسهل التلاعب بسعرهما."""
+    try:
+        info = yf.Ticker(symbol).info
+        market_cap = info.get("marketCap")
+        bid, ask = info.get("bid"), info.get("ask")
+        spread_pct = round(((ask - bid) / ask) * 100, 2) if (bid and ask and ask > 0) else None
+        is_penny_stock = bool(market_cap and market_cap < min_market_cap)
+        wide_spread = bool(spread_pct is not None and spread_pct > max_spread_pct)
+        return {
+            "market_cap": market_cap, "spread_pct": spread_pct,
+            "is_penny_stock": is_penny_stock, "wide_spread": wide_spread,
+            "flagged": is_penny_stock or wide_spread,
+        }
+    except Exception:
+        return {"market_cap": None, "spread_pct": None, "is_penny_stock": False, "wide_spread": False, "flagged": False}
+
+
+def estimate_holding_period(entry_price, target_price, atr_value) -> Dict:
+    """يقدّر أفق الاحتفاظ المتوقع بناءً على مسافة الهدف مقارنة بتقلب السهم الفعلي (ATR) — يُستخدم فقط لو الذكاء الاصطناعي ما رجّع تصنيفه الخاص."""
+    if not entry_price or not target_price or not atr_value or atr_value <= 0:
+        return {"label": "غير محدد", "expiry_hours": 48}
+    atr_multiple = abs(target_price - entry_price) / atr_value
+    if atr_multiple <= 0.5:
+        return {"label": "⚡ تداول خاطف (Scalp، 15 دقيقة–ساعتين)", "expiry_hours": 2}
+    elif atr_multiple <= 1.5:
+        return {"label": "📅 تداول يومي (Intraday، حتى إغلاق الجلسة)", "expiry_hours": 8}
+    else:
+        return {"label": "🌊 تداول موجي (Swing، يومين–5 أيام عمل)", "expiry_hours": 120}
+
+
+AI_HOLDING_PERIOD_LABELS = {
+    "scalp": {"label": "⚡ تداول خاطف (Scalp، 15 دقيقة–ساعتين) — حسب تحليل AI لطبيعة الخبر", "expiry_hours": 2},
+    "intraday": {"label": "📅 تداول يومي (Intraday، حتى إغلاق الجلسة) — حسب تحليل AI لطبيعة الخبر", "expiry_hours": 8},
+    "swing": {"label": "🌊 تداول موجي (Swing، يومين–5 أيام عمل) — حسب تحليل AI لطبيعة الخبر", "expiry_hours": 120},
+}
+
+
+def resolve_holding_period(plan: Dict, symbol: str) -> Dict:
+    """
+    يحدد أفق الاحتفاظ المعتمد للتوصية: يُفضّل دائماً تصنيف الذكاء الاصطناعي
+    نفسه (holding_period_category) لأنه مبني على فهم طبيعة الخبر/المحفّز
+    الفعلية (مضاربة سريعة، رد فعل أرباح، خبر استراتيجي)، ويرجع فقط لحساب
+    ATR الميكانيكي كبديل احتياطي لو التحليل قديم وما فيه هذا الحقل.
+    """
+    ai_category = (plan.get("holding_period_category") or "").strip().lower()
+    if ai_category in AI_HOLDING_PERIOD_LABELS:
+        return AI_HOLDING_PERIOD_LABELS[ai_category]
+
+    atr_info = calculate_atr(symbol)
+    atr_value = atr_info.get("atr") if "error" not in atr_info else None
+    fallback = estimate_holding_period(plan.get("entry_price"), plan.get("target_price"), atr_value)
+    fallback["label"] += " — تقدير آلي احتياطي (AI ما رجّع تصنيف مباشر)"
+    return fallback
+
+
+def run_signal_validation(symbol: str, action: str, news_source: str = "", plan: Optional[Dict] = None) -> Dict:
+    """
+    البوابة الشاملة لفحص موثوقية أي إشارة قبل تسجيلها كتوصية نهائية — تجمع
+    فحوصات السيولة/اتجاه السوق/اتجاه السهم/الأرباح القادمة/جودة السيولة/
+    مصدر الخبر بمكان واحد، وتقرر هل تُحظر الإشارة تلقائياً (Hard Block —
+    للحالات عالية الخطورة فقط: أرباح قريبة أو Penny Stock) أو تُمرَّر مع
+    تحذيرات (للعوامل الأخف مثل ضعف الحجم أو تعارض الاتجاه).
+    """
+    is_buy_signal = "دخول" in (action or "") or "شراء" in (action or "")
+    warnings: List[str] = []
+    block_reasons: List[str] = []
+
+    volume = check_volume_confirmation(symbol) if is_buy_signal else {"confirmed": None}
+    if is_buy_signal and volume.get("confirmed") is False:
+        warnings.append(f"📉 حجم التداول الحالي أقل من الحد المطلوب فوق المتوسط (النسبة: {volume.get('ratio_pct', '—')}%) — سيولة تأكيد ضعيفة.")
+
+    market_trend = get_market_trend_bias()
+    stock_trend = get_stock_daily_trend(symbol)
+    if is_buy_signal and market_trend.get("trend") == "هابط":
+        warnings.append("⚠️ السوق العام (S&P 500) بترند هابط حالياً — التداول عكس الاتجاه العام مخاطرة إضافية.")
+    if is_buy_signal and stock_trend.get("trend") == "هابط":
+        warnings.append("⚠️ السهم نفسه بترند هابط على الإطار اليومي (تحت متوسطه 50 يوم) — الإشارة عكس اتجاهه العام.")
+
+    earnings = check_earnings_blackout(symbol)
+    if earnings.get("blackout"):
+        block_reasons.append(f"🚫 موعد إعلان أرباح {symbol} خلال {earnings['hours_until']} ساعة ({earnings['earnings_date']}) — مخاطرة فجوة سعرية عالية.")
+
+    liquidity = check_liquidity_quality(symbol)
+    if liquidity.get("is_penny_stock"):
+        block_reasons.append("🚫 القيمة السوقية للسهم صغيرة جداً (Penny Stock) — سهل التلاعب بسعره.")
+    if liquidity.get("wide_spread"):
+        warnings.append(f"⚠️ الفارق بين سعري العرض والطلب واسع ({liquidity.get('spread_pct')}%) — التنفيذ الفعلي ممكن يكون أسوأ من السعر المعروض.")
+
+    source_trust = score_news_source_trust(news_source)
+    if source_trust["trust_score"] < 0.6:
+        warnings.append(f"ℹ️ مصدر الخبر ({news_source or 'غير محدد'}) غير موثوق بدرجة عالية — تحقق من صحته قبل الاعتماد الكامل عليه.")
+
+    holding = {"label": "غير محدد", "expiry_hours": 48}
+    if plan:
+        holding = resolve_holding_period(plan, symbol)
+
+    return {
+        "hard_block": len(block_reasons) > 0,
+        "block_reasons": block_reasons,
+        "warnings": warnings,
+        "volume": volume,
+        "market_trend": market_trend,
+        "stock_trend": stock_trend,
+        "earnings": earnings,
+        "liquidity": liquidity,
+        "source_trust": source_trust,
+        "holding_period": holding,
+        "expires_at": (dt.datetime.now() + dt.timedelta(hours=holding["expiry_hours"])).isoformat(timespec="seconds"),
+    }

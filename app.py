@@ -1545,6 +1545,18 @@ with tab_monitor:
         st.session_state["seen_news_fp"] = set()
 
     if enable_monitor:
+        if "last_auto_rec_check" not in st.session_state or \
+           (dt.datetime.now() - st.session_state["last_auto_rec_check"]).total_seconds() > 300:
+            auto_check_result = check_and_update_open_recommendations()
+            record_last_auto_check(source="مراقبة تلقائية (كل 5 دقائق)")
+            st.session_state["last_auto_rec_check"] = dt.datetime.now()
+            if auto_check_result["checked"] > 0:
+                st.toast(
+                    f"📊 فحص تلقائي لسجل التوصيات: ✅ {auto_check_result['hit_target']} تحقق هدف | "
+                    f"❌ {auto_check_result['hit_stop']} ضرب وقف | 🔓 {auto_check_result['still_open']} لسا مفتوحة",
+                    icon="📊",
+                )
+
         newly_found = None
         if not finnhub_key:
             st.warning("أدخل مفتاح Finnhub من الشريط الجانبي لتفعيل المراقبة.")

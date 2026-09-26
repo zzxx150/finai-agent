@@ -1671,15 +1671,13 @@ with tab_monitor:
                 if enable_ntfy and ntfy_topic:
                     send_ntfy_alert(ntfy_topic, news_msg, title=f"{msg_prefix}: {item['_symbol']}", priority=4)
 
-                if enable_auto_ai and openai_key:
-                    price_ctx = None
-                    if item["_symbol"] not in ("خبر عام",):
-                        price_ctx = calculate_support_resistance(item["_symbol"])
-                        if "error" not in price_ctx:
-                            atr_info = calculate_atr(item["_symbol"])
-                            if "error" not in atr_info:
-                                price_ctx["atr_suggested_stop_distance"] = atr_info["suggested_stop_distance"]
-                                price_ctx["atr_suggested_target_distance"] = atr_info["suggested_target_distance"]
+                if enable_auto_ai and openai_key and item["_symbol"] != "خبر عام":
+                    price_ctx = calculate_support_resistance(item["_symbol"])
+                    if "error" not in price_ctx:
+                        atr_info = calculate_atr(item["_symbol"])
+                        if "error" not in atr_info:
+                            price_ctx["atr_suggested_stop_distance"] = atr_info["suggested_stop_distance"]
+                            price_ctx["atr_suggested_target_distance"] = atr_info["suggested_target_distance"]
                     analysis = analyze_news_with_ai(
                         openai_key, item["headline"], item.get("summary", ""), item["_symbol"],
                         model=ai_model, price_context=price_ctx,

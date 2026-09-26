@@ -86,6 +86,10 @@ from utils import (
     get_confluence_accuracy_chart_data,
     calculate_kelly_criterion,
     generate_daily_market_brief,
+    get_benchmark_comparison,
+    record_last_auto_check,
+    get_last_auto_check,
+    run_signal_validation,
 )
 
 load_dotenv()
@@ -1333,15 +1337,57 @@ with tab_search:
                                                     analysis.get("sentiment", ""), analysis.get("is_likely_official", False),
                                                 )
 
+                                        validation = None
+                                        if "دخول" in plan.get("action", ""):
+                                            with st.spinner("جاري فحص موثوقية الإشارة (حجم، اتجاه سوق، أرباح، سيولة)..."):
+                                                validation = run_signal_validation(
+                                                    symbol_input, plan.get("action", ""),
+                                                    news_source=news.get("source", ""), plan=plan,
+                                                )
+
+                                        target_price_2 = None
+                                        if validation and plan.get("entry_price") and plan.get("target_price"):
+                                            target_price_2 = round(
+                                                plan["entry_price"] + (plan["target_price"] - plan["entry_price"]) * 0.5, 2
+                                            )
+
                                         if has_recent_open_recommendation(symbol_input, hours=24):
                                             st.info("ℹ️ فيه توصية مفتوحة لنفس السهم خلال آخر 24 ساعة — ما راح تُسجَّل هذي كتوصية جديدة (بس التحليل يظهر لك تحت).")
+                                        elif validation and validation["hard_block"]:
+                                            st.error("🚫 ما تم حفظ هذي التوصية تلقائياً — فحص الموثوقية لقى مانع حقيقي:")
+                                            for reason in validation["block_reasons"]:
+                                                st.markdown(f"- {reason}")
+                                            override_key = f"override_block_{idx}"
+                                            if st.checkbox("أفهم المخاطرة وأبي أسجّلها يدوياً رغم التحذير", key=override_key):
+                                                if st.button("💾 سجّل التوصية رغم التحذير", key=f"force_save_{idx}"):
+                                                    save_recommendation(
+                                                        symbol_input, headline, analysis,
+                                                        created_by=st.session_state.get("username", "system"),
+                                                        confluence_score=confluence["score"] if confluence else None,
+                                                        target_price_2=target_price_2,
+                                                        holding_period=validation["holding_period"]["label"],
+                                                        expires_at=validation["expires_at"],
+                                                        validation_notes="[تم التجاوز يدوياً] " + " | ".join(validation["block_reasons"] + validation["warnings"]),
+                                                    )
+                                                    st.success("✅ تم الحفظ يدوياً مع تسجيل تجاوز التحذير بالسجل.")
                                         else:
+                                            if validation and validation["warnings"]:
+                                                with st.expander("⚠️ تحذيرات موثوقية (تم الحفظ رغمها — راجعها قبل الدخول الفعلي)"):
+                                                    for w in validation["warnings"]:
+                                                        st.markdown(f"- {w}")
                                             save_recommendation(
                                                 symbol_input, headline, analysis,
                                                 created_by=st.session_state.get("username", "system"),
                                                 confluence_score=confluence["score"] if confluence else None,
+                                                target_price_2=target_price_2,
+                                                holding_period=validation["holding_period"]["label"] if validation else None,
+                                                expires_at=validation["expires_at"] if validation else None,
+                                                validation_notes=" | ".join(validation["warnings"]) if validation and validation["warnings"] else None,
                                             )
-                                            st.caption("✅ تم حفظ هذه التوصية في سجل التوصيات (تبويب 📂).")
+                                            if validation:
+                                                st.caption(f"✅ تم الحفظ — الأفق الزمني المتوقع: {validation['holding_period']['label']}")
+                                            else:
+                                                st.caption("✅ تم حفظ هذه التوصية في سجل التوصيات (تبويب 📂).")
                                         sentiment_color = {
                                             "إيجابي جداً": "green", "إيجابي": "green",
                                             "محايد": "gray",
@@ -1651,13 +1697,33 @@ with tab_monitor:
                                 analysis.get("sentiment", ""), analysis.get("is_likely_official", False),
                             )
 
+                        validation = None
+                        if "دخول" in plan.get("action", ""):
+                            validation = run_signal_validation(
+                                item["_symbol"], plan.get("action", ""),
+                                news_source=item.get("source", ""), plan=plan,
+                            )
+
+                        target_price_2 = None
+                        if validation and plan.get("entry_price") and plan.get("target_price"):
+                            target_price_2 = round(
+                                plan["entry_price"] + (plan["target_price"] - plan["entry_price"]) * 0.5, 2
+                            )
+
                         if has_recent_open_recommendation(item["_symbol"], hours=24):
                             st.caption(f"ℹ️ تم تجاهل حفظ توصية مكررة لـ {item['_symbol']} (فيه توصية مفتوحة خلال آخر 24 ساعة).")
+                        elif validation and validation["hard_block"]:
+                            st.toast(f"🚫 تم تجاهل توصية {item['_symbol']} تلقائياً — فحص الموثوقية لقى مانع.", icon="🚫")
+                            st.caption(f"🚫 {item['_symbol']}: ما تم حفظ توصية آلياً — " + " | ".join(validation["block_reasons"]))
                         else:
                             save_recommendation(
                                 item["_symbol"], item["headline"], analysis,
                                 created_by=st.session_state.get("username", "system"),
                                 confluence_score=confluence["score"] if confluence else None,
+                                target_price_2=target_price_2,
+                                holding_period=validation["holding_period"]["label"] if validation else None,
+                                expires_at=validation["expires_at"] if validation else None,
+                                validation_notes=" | ".join(validation["warnings"]) if validation and validation["warnings"] else None,
                             )
                             confluence_line = f"🧭 درجة التطابق: {confluence['score']}% — {confluence['verdict']}\n" if confluence else ""
                             entry_p = plan.get("entry_price")
@@ -1673,6 +1739,7 @@ with tab_monitor:
                                 shariah_badge_line = f"{_sh_icon} التوافق الشرعي (استرشادي): {_sh.get('status', '—')}\n"
                             except Exception:
                                 pass
+                            holding_line = f"⏱️ الأفق الزمني (تحليل AI): {validation['holding_period']['label']}\n" if validation else ""
                             rec_msg = (
                                 f"🎯 توصية جديدة: {item['_symbol']}\n"
                                 f"{shariah_badge_line}"
@@ -1682,7 +1749,8 @@ with tab_monitor:
                                 f"الدخول: {plan.get('entry_note', '—')}\n"
                                 f"وقف الخسارة: {plan.get('stop_loss_note', '—')}\n"
                                 f"الهدف: {plan.get('target_note', '—')}\n"
-                                f"المدة التقريبية: {plan.get('estimated_duration', '—')}"
+                                f"{holding_line}"
+                                f"المدة التقريبية (وصف عام): {plan.get('estimated_duration', '—')}"
                             )
                             meets_threshold = (confluence is None) or (confluence["score"] >= min_confluence_for_alert)
                             if meets_threshold:
@@ -1738,9 +1806,11 @@ with tab_recommendations:
     if st.button("🔄 تحديث حالة الصفقات المفتوحة", type="primary", use_container_width=True):
         with st.spinner("جاري مقارنة الصفقات المفتوحة بالأسعار الحالية..."):
             result = check_and_update_open_recommendations()
+            record_last_auto_check(source="فحص يدوي")
         st.success(
             f"✅ تم فحص {result['checked']} صفقة — "
-            f"تحقق الهدف: {result['hit_target']} | ضرب وقف الخسارة: {result['hit_stop']} | لسا مفتوحة: {result['still_open']}"
+            f"تحقق الهدف: {result['hit_target']} | ضرب وقف الخسارة: {result['hit_stop']} | "
+            f"TP1 جزئي: {result.get('hit_tp1', 0)} | ألغيت بانتهاء المدة: {result.get('expired', 0)} | لسا مفتوحة: {result['still_open']}"
         )
 
     win_stats = get_win_rate_stats()
@@ -1749,7 +1819,19 @@ with tab_recommendations:
         wc1.metric("✅ تحقق الهدف", win_stats["hit_target"])
         wc2.metric("❌ ضرب وقف الخسارة", win_stats["hit_stop"])
         wc3.metric("🔓 لسا مفتوحة", win_stats["still_open"])
-        wc4.metric("📊 نسبة النجاح الفعلية", f"{win_stats['win_rate']}%")
+        ci_low, ci_high = win_stats.get("win_rate_ci_low"), win_stats.get("win_rate_ci_high")
+        ci_help = (
+            f"فاصل الثقة الإحصائي (95%): النسبة الحقيقية على الأرجح بين {ci_low}% و {ci_high}% — "
+            "مو رقم ثابت 100%، خصوصاً مع عيّنة صغيرة."
+        ) if ci_low is not None else None
+        wc4.metric("📊 نسبة النجاح الفعلية", f"{win_stats['win_rate']}%", help=ci_help)
+
+        if win_stats.get("is_small_sample"):
+            st.warning(
+                f"⚠️ العيّنة لسا صغيرة ({win_stats['total_closed']} صفقة مغلقة فقط) — نسبة النجاح ممكن تتغيّر "
+                f"بشكل ملحوظ مع أول كم صفقة جديدة. بحساب إحصائي دقيق، النسبة الحقيقية على الأرجح بين "
+                f"{ci_low}% و {ci_high}% (فاصل ثقة 95%) — خذ الرقم كمؤشر أولي، مو حكم نهائي."
+            )
 
         if win_stats.get("avg_risk_reward") is not None:
             wc5, wc6 = st.columns(2)
@@ -1763,6 +1845,42 @@ with tab_recommendations:
                 "رقم موجب يعني الاستراتيجية مربحة إحصائياً على المدى الطويل حتى لو نسبة النجاح أقل من 50%، "
                 "ورقم سالب يعني العكس حتى لو نسبة النجاح عالية."
             )
+
+        with st.expander("🛡️ موثوقية هذي الأرقام — كيف تُحسب ووش حدودها؟"):
+            last_check = get_last_auto_check()
+            if last_check.get("timestamp"):
+                st.caption(f"🕐 آخر فحص فعلي لحالة الصفقات مقابل السعر الحقيقي: {last_check['timestamp']} ({last_check.get('source', '')})")
+            st.markdown(
+                "- **مصدر النتيجة:** كل صفقة تُحسم آلياً بمقارنة السعر الفعلي (من مزوّد بيانات خارجي) بسعري الهدف "
+                "ووقف الخسارة المسجّلين وقت التوصية — بدون أي تدخل بشري أو تعديل لاحق.\n"
+                "- **لا تعديل رجعي:** التوصية تُسجَّل لحظة إنشائها (السعر/الهدف/الوقف) ولا تتغيّر بعدها؛ فقط 'الحالة' "
+                "(مفتوحة/تحقق الهدف/ضرب الوقف) تُحدَّث تلقائياً بناءً على السعر الحقيقي.\n"
+                "- **حدود الرقم:** نسبة النجاح وحدها لا تكفي — راجع أيضاً 'التوقع الرياضي' فوق ونتيجة المقارنة "
+                "بمؤشر السوق تحت، لأن استراتيجية بنسبة نجاح 40% ممكن تكون مربحة أكثر من استراتيجية بنسبة 60% لو "
+                "كانت أرباحها أكبر من خسائرها بكثير."
+            )
+
+            benchmark_col1, benchmark_col2 = st.columns([4, 1.3])
+            benchmark_col1.markdown("**📈 مقارنة بمؤشر السوق العام (S&P 500)**")
+            run_benchmark = benchmark_col2.button("🔄 قارن الآن", use_container_width=True, key="run_benchmark")
+
+            if run_benchmark:
+                with st.spinner("جاري جلب بيانات المؤشر المرجعي ومقارنتها..."):
+                    st.session_state["benchmark_data"] = get_benchmark_comparison()
+
+            benchmark = st.session_state.get("benchmark_data")
+            if benchmark is None:
+                st.caption("اضغط '🔄 قارن الآن' لمقارنة أداء توصياتنا بأداء مؤشر S&P 500 بنفس الفترة (ما يشتغل تلقائياً عشان ما يبطّئ الصفحة).")
+            elif benchmark.get("has_data"):
+                bc1, bc2 = st.columns(2)
+                bc1.metric("📈 عائد مؤشر S&P 500 بنفس الفترة", f"{benchmark['spy_return_pct']}%")
+                bc2.metric("🎯 متوسط عائد صفقاتنا (وحدة R)", f"{benchmark['avg_r_multiple']}R" if benchmark.get("avg_r_multiple") is not None else "—")
+                st.caption(
+                    f"مقارنة من {benchmark['period_start']} لليوم — أهم اختبار لأي نظام توصيات: هل هو أفضل فعلاً "
+                    "من مجرد شراء المؤشر العام والانتظار؟ لو المؤشر طالع بنفس القدر أو أكثر، النظام ما يضيف قيمة حقيقية."
+                )
+            else:
+                st.caption(benchmark.get("reason", "لا توجد بيانات كافية للمقارنة بالمؤشر العام حالياً."))
     else:
         st.caption("ما فيه صفقات مغلقة بعد — اضغط 'تحديث حالة الصفقات' للفحص، أو انتظر توصيات جديدة تتحقق مع الوقت.")
 
@@ -1820,9 +1938,13 @@ with tab_recommendations:
         status_icon_map = {
             "hit_target": "✅ تحقق الهدف",
             "hit_stop": "❌ ضرب وقف الخسارة",
+            "expired": "⌛ ألغيت (انتهت المدة)",
         }
         for rec in recs:
-            rec["الحالة"] = status_icon_map.get(rec.get("status"), "🔓 مفتوحة")
+            base_status = status_icon_map.get(rec.get("status"), "🔓 مفتوحة")
+            if rec.get("tp1_hit") and rec.get("status") not in ("hit_target", "hit_stop", "expired"):
+                base_status += " (🎯 TP1 تحقق)"
+            rec["الحالة"] = base_status
 
         if status_filter == "❌ ضرب وقف الخسارة فقط (الفاشلة)":
             recs = [r for r in recs if r.get("status") == "hit_stop"]
@@ -1848,7 +1970,7 @@ with tab_recommendations:
 
         display_cols = [
             "created_at", "symbol", "action", "الحالة", "sentiment", "confidence",
-            "estimated_duration", "entry_price", "stop_loss_price", "target_price",
+            "estimated_duration", "holding_period", "entry_price", "stop_loss_price", "target_price_2", "target_price",
             "stop_distance_pct", "confluence_score",
             "entry_note", "stop_loss_note", "target_note", "score",
         ]
@@ -1856,14 +1978,23 @@ with tab_recommendations:
         rename_map = {
             "created_at": "الوقت", "symbol": "الرمز", "action": "الإجراء",
             "sentiment": "المعنويات", "confidence": "الثقة %",
-            "estimated_duration": "المدة التقديرية",
-            "entry_price": "سعر الدخول ($)", "stop_loss_price": "وقف الخسارة ($)", "target_price": "الهدف ($)",
+            "estimated_duration": "المدة التقديرية", "holding_period": "الأفق الزمني (تحقق)",
+            "entry_price": "سعر الدخول ($)", "stop_loss_price": "وقف الخسارة ($)",
+            "target_price_2": "TP1 (جزئي، $)", "target_price": "TP2 / الهدف الكامل ($)",
             "stop_distance_pct": "مسافة الوقف %", "confluence_score": "درجة التطابق",
             "entry_note": "ملاحظة الدخول",
             "stop_loss_note": "ملاحظة وقف الخسارة", "target_note": "ملاحظة الهدف", "score": "درجة الترتيب",
         }
         df_display = df_recs[display_cols].rename(columns=rename_map)
         st.dataframe(df_display, use_container_width=True, hide_index=True)
+
+        with st.expander("ℹ️ ملاحظات فحص الموثوقية للتوصيات (تحذيرات وقت الإنشاء)"):
+            notes_rows = [r for r in recs if r.get("validation_notes")]
+            if not notes_rows:
+                st.caption("ما فيه ملاحظات فحص موثوقية مسجّلة على التوصيات الحالية.")
+            else:
+                for r in notes_rows[:30]:
+                    st.markdown(f"**{r.get('symbol')}** ({r.get('created_at', '')[:16]}): {r.get('validation_notes')}")
 
         csv_data = df_display.to_csv(index=False).encode("utf-8-sig")
         st.download_button(
